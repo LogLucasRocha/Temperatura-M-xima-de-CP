@@ -1,0 +1,10 @@
+# Artefatos gerados
+reports/
+data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Config local do Claude Code
+.claude/settings.local.json
