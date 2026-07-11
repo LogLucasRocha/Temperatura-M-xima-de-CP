@@ -307,11 +307,6 @@ def station_hourly_lines(ctx: dict) -> str:
     return "\n\n".join(blocks)
 
 
-def digest_header(when_label: str) -> str:
-    return (f"🌡️ <b>Previsão de máxima</b> · {when_label}\n"
-            "Mediana e P10–P90 do ensemble corrigido; ≥X = prob. de exceder.")
-
-
 def station_divider(station) -> str:
     """Separador visual que abre o bloco de uma estação no digest."""
     return (f"━━━━━━━━━━━━━━━\n"

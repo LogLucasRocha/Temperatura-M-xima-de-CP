@@ -128,10 +128,6 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 — leitura da carteira é acessório
             print(f"[polymarket] ERRO ao ler posições: {exc}", file=sys.stderr)
 
-    now = dt.datetime.now(stations[0].tz)
-    notify.send_message(
-        token, chat_id, notify.digest_header(now.strftime("%d/%m/%Y %H:%M")))
-
     state = _load_digest_state()
 
     # 3) Sinais, uma mensagem por cidade: faixas do dia operável (D0, ou D+1
