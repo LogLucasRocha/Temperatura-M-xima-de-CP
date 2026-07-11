@@ -2,13 +2,9 @@ name: Previsão Tmax → Telegram
 
 on:
   schedule:
-    # Aos minutos :05 e :35 de toda hora (00:05, 00:35, 01:05…). Brasília é
-    # UTC-3, então o minuto é o mesmo em UTC e BRT. Obs.: o cron do GitHub
-    # pode atrasar alguns minutos em horários de pico.
     - cron: "5,35 * * * *"
-  workflow_dispatch:        # permite rodar manualmente pelo botão "Run workflow"
+  workflow_dispatch:        
 
-# Evita duas execuções simultâneas se um agendamento atrasar.
 concurrency:
   group: telegram-tmax
   cancel-in-progress: false
