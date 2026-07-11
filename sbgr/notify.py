@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import io
+import time
 
 import matplotlib
 
@@ -295,19 +296,48 @@ def station_divider(station) -> str:
 
 # ----------------------------------------------------------- envio Telegram
 
+_RETRY_WAITS = (3, 8, 20)  # segundos entre tentativas
+
+
+def _tg_post(token: str, method: str, data: dict, files=None,
+             timeout: int = 60) -> None:
+    """POST na Bot API com retry para falhas transitórias (timeout, conexão,
+    5xx e 429 respeitando o retry_after do flood control).
+
+    Um timeout DEPOIS de o Telegram receber o envio pode duplicar a mensagem
+    no chat ao repetir — aceitável num digest; pior seria perder o resto."""
+    for wait in (*_RETRY_WAITS, None):
+        try:
+            r = requests.post(f"{TELEGRAM_API}/bot{token}/{method}",
+                              data=data, files=files, timeout=timeout)
+            r.raise_for_status()
+            return
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout):
+            if wait is None:
+                raise
+        except requests.exceptions.HTTPError as exc:
+            resp = exc.response
+            status = resp.status_code if resp is not None else 0
+            if wait is None or (status < 500 and status != 429):
+                raise
+            if status == 429:
+                try:
+                    wait = max(wait, int(resp.json()["parameters"]["retry_after"]))
+                except Exception:
+                    pass
+        time.sleep(wait)
+
+
 def send_message(token: str, chat_id: str, text: str) -> None:
-    r = requests.post(
-        f"{TELEGRAM_API}/bot{token}/sendMessage",
-        data={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+    _tg_post(token, "sendMessage",
+             {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
               "disable_web_page_preview": "true"},
-        timeout=30)
-    r.raise_for_status()
+             timeout=30)
 
 
 def send_photo(token: str, chat_id: str, png: bytes, caption: str) -> None:
-    r = requests.post(
-        f"{TELEGRAM_API}/bot{token}/sendPhoto",
-        data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
-        files={"photo": ("previsao.png", png, "image/png")},
-        timeout=60)
-    r.raise_for_status()
+    _tg_post(token, "sendPhoto",
+             {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+             files={"photo": ("previsao.png", png, "image/png")},
+             timeout=90)

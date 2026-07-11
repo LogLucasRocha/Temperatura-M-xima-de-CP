@@ -126,56 +126,68 @@ def main() -> int:
     # uma parte/estação não derruba o resto.
     for station in stations:
         ctx = contexts.get(station.icao)
-        notify.send_message(token, chat_id, notify.station_divider(station))
-
-        # 3a) posições abertas desta cidade, com a chance de dar certo
-        if positions:
-            msg = polymarket.station_positions_message(
-                station, positions, position_success_prob)
-            if msg:
-                notify.send_message(token, chat_id, msg)
-
-        if ctx is None:
-            notify.send_message(
-                token, chat_id,
-                f"⚠️ Sem dados suficientes agora "
-                f"({errors.get(station.icao, '')}).")
-            continue
-
-        # 3b) tabela: probabilidade real vs. preço do mercado (hoje e amanhã)
-        day_tables: list[tuple] = []
-        for day_label, date in (("Hoje", ctx["d0"]), ("Amanhã", ctx["d1"])):
-            slug = polymarket.event_slug(station.icao, date)
-            if not slug:
-                continue
-            try:
-                event = polymarket.fetch_event(slug)
-            except Exception as exc:  # noqa: BLE001 — tabela é acessória
-                print(f"[polymarket] ERRO evento {slug}: {exc}", file=sys.stderr)
-                continue
-            rows = polymarket.odds_rows(event, yes_prob)
-            if rows:
-                day_tables.append((day_label, date, rows))
-        if day_tables:
-            try:
-                notify.send_photo(token, chat_id,
-                                  notify.odds_table_png(station, day_tables),
-                                  notify.odds_caption(station))
-                print(f"[{station.icao}] tabela de odds enviada "
-                      f"({len(day_tables)} dia(s)).")
-            except Exception as exc:  # noqa: BLE001 — tabela é acessória
-                print(f"[{station.icao}] ERRO ao enviar tabela: {exc}",
-                      file=sys.stderr)
-        else:
-            print(f"[{station.icao}] sem mercado de odds relevante.")
-
-        # 3c) gráfico com nowcast + distribuições e o hora a hora
-        notify.send_photo(token, chat_id, notify.station_chart_png(ctx),
-                          notify.station_lines(ctx))
-        notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
-        print(f"[{station.icao}] enviado.")
+        try:
+            _send_station_block(token, chat_id, station, ctx, positions,
+                                errors, yes_prob, position_success_prob)
+        except Exception as exc:  # noqa: BLE001 — falha de envio de uma estação não derruba as demais
+            errors[station.icao] = str(exc)
+            print(f"[{station.icao}] ERRO no bloco: {exc}", file=sys.stderr)
 
     return 1 if len(errors) == len(stations) else 0
+
+
+def _send_station_block(token, chat_id, station, ctx, positions,
+                        errors, yes_prob, position_success_prob) -> None:
+    """Envia o bloco completo de UMA estação (divisor, posições, tabela de
+    odds, gráfico e hora a hora). Levanta na primeira falha de envio."""
+    notify.send_message(token, chat_id, notify.station_divider(station))
+
+    # 3a) posições abertas desta cidade, com a chance de dar certo
+    if positions:
+        msg = polymarket.station_positions_message(
+            station, positions, position_success_prob)
+        if msg:
+            notify.send_message(token, chat_id, msg)
+
+    if ctx is None:
+        notify.send_message(
+            token, chat_id,
+            f"⚠️ Sem dados suficientes agora "
+            f"({errors.get(station.icao, '')}).")
+        return
+
+    # 3b) tabela: probabilidade real vs. preço do mercado (hoje e amanhã)
+    day_tables: list[tuple] = []
+    for day_label, date in (("Hoje", ctx["d0"]), ("Amanhã", ctx["d1"])):
+        slug = polymarket.event_slug(station.icao, date)
+        if not slug:
+            continue
+        try:
+            event = polymarket.fetch_event(slug)
+        except Exception as exc:  # noqa: BLE001 — tabela é acessória
+            print(f"[polymarket] ERRO evento {slug}: {exc}", file=sys.stderr)
+            continue
+        rows = polymarket.odds_rows(event, yes_prob)
+        if rows:
+            day_tables.append((day_label, date, rows))
+    if day_tables:
+        try:
+            notify.send_photo(token, chat_id,
+                              notify.odds_table_png(station, day_tables),
+                              notify.odds_caption(station))
+            print(f"[{station.icao}] tabela de odds enviada "
+                  f"({len(day_tables)} dia(s)).")
+        except Exception as exc:  # noqa: BLE001 — tabela é acessória
+            print(f"[{station.icao}] ERRO ao enviar tabela: {exc}",
+                  file=sys.stderr)
+    else:
+        print(f"[{station.icao}] sem mercado de odds relevante.")
+
+    # 3c) gráfico com nowcast + distribuições e o hora a hora
+    notify.send_photo(token, chat_id, notify.station_chart_png(ctx),
+                      notify.station_lines(ctx))
+    notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
+    print(f"[{station.icao}] enviado.")
 
 
 if __name__ == "__main__":
