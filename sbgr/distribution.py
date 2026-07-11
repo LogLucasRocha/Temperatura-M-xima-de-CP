@@ -159,4 +159,43 @@ def build_distribution(member_maxima: list[dict], bias: dict,
         "exceed": exceed,
         "mean": round(mean, 1),
         "n_members": len(member_maxima),
+        # Guardados para reavaliar a distribuição em pontos arbitrários (ex.:
+        # probabilidade de um mercado do Polymarket com arredondamento ao meio
+        # grau). Mesma definição de CDF usada acima (sem renormalizar a massa
+        # truncada), para bater com os `exceed` já exibidos.
+        "comps": comps,
+        "obs_floor": obs_floor,
     }
+
+
+def dist_cdf(dist: dict, x: float) -> float | None:
+    """P(Tmax ≤ x) da mistura guardada em `dist` (mesma CDF do build). None se a
+    distribuição não trouxer os componentes."""
+    comps = dist.get("comps")
+    if not comps:
+        return None
+    floor = dist.get("obs_floor")
+    if floor is not None and x < floor:
+        return 0.0
+    return sum(_norm_cdf(x, mu, s) for mu, s in comps) / len(comps)
+
+
+def market_prob(dist: dict | None, threshold: float, mode: str) -> float | None:
+    """Probabilidade do YES de um mercado de máxima resolver, dada a distribuição.
+
+    Convenção do Polymarket "highest temperature be N°C": a máxima reportada é
+    arredondada ao inteiro, então a faixa exata de N é [N-0.5, N+0.5).
+      - 'exact'   → P(N-0.5 ≤ Tmax < N+0.5)
+      - 'atleast' → P(Tmax ≥ N-0.5)   ("N°C or higher")
+      - 'atmost'  → P(Tmax < N+0.5)    ("N°C or lower")
+    Retorna None se a distribuição não permite o cálculo."""
+    if dist is None:
+        return None
+    if mode == "atleast":
+        c = dist_cdf(dist, threshold - 0.5)
+        return None if c is None else 1.0 - c
+    if mode == "atmost":
+        return dist_cdf(dist, threshold + 0.5)
+    hi = dist_cdf(dist, threshold + 0.5)
+    lo = dist_cdf(dist, threshold - 0.5)
+    return None if hi is None or lo is None else max(0.0, hi - lo)

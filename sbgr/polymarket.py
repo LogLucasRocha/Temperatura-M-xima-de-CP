@@ -13,12 +13,49 @@ A Data-API devolve uma lista de posições; os campos que usamos:
 from __future__ import annotations
 
 import html
+import re
 
 import requests
 
 from . import config
 
 DATA_API = "https://data-api.polymarket.com"
+
+# Cidade no título do mercado (em inglês) → ICAO da estação que resolve o
+# mercado. Cidades fora deste mapa (ex.: Seoul) ficam sem probabilidade.
+_MARKET_CITY_TO_ICAO = {
+    "moscow": "UUWW",
+    "buenos aires": "SAEZ",
+    "sao paulo": "SBGR",
+    "são paulo": "SBGR",
+}
+
+# "Will the highest temperature in <cidade> be <N>°C [or higher/lower] on ...?"
+_TEMP_RE = re.compile(
+    r"highest temperature in (?P<city>.+?) be (?P<temp>-?\d+)\s*°?\s*c"
+    r"(?P<mod>\s+or\s+(?:higher|above|more|lower|below|less))?",
+    re.IGNORECASE)
+
+
+def parse_temp_market(title: str | None) -> dict | None:
+    """Extrai {icao, threshold, mode} de um título de mercado de máxima.
+
+    `mode` ∈ {'exact','atleast','atmost'}. Retorna None se não for um mercado de
+    temperatura de uma cidade que acompanhamos."""
+    m = _TEMP_RE.search(title or "")
+    if not m:
+        return None
+    icao = _MARKET_CITY_TO_ICAO.get(m.group("city").strip().lower())
+    if not icao:
+        return None
+    mod = (m.group("mod") or "").lower()
+    if any(w in mod for w in ("higher", "above", "more")):
+        mode = "atleast"
+    elif any(w in mod for w in ("lower", "below", "less")):
+        mode = "atmost"
+    else:
+        mode = "exact"
+    return {"icao": icao, "threshold": int(m.group("temp")), "mode": mode}
 
 # Posições com valor atual abaixo disso são tratadas como poeira e omitidas do
 # resumo (evita listar restos de dust de mercados já resolvidos).
@@ -53,8 +90,23 @@ def _fmt_signed(v: float) -> str:
     return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
 
 
-def _position_line(p: dict) -> str:
-    """Uma posição aberta em uma linha (HTML do Telegram)."""
+def _prob_line(prob: float | None) -> str:
+    """Linha da chance de a posição *dar certo* segundo a previsão atual.
+    String vazia quando não sabemos casar o mercado com uma estação/dia."""
+    if prob is None:
+        return "\n   🎯 <i>sem previsão para casar (cidade/dia fora do alcance)</i>"
+    if prob >= 0.65:
+        tag = "provável ✅"
+    elif prob <= 0.35:
+        tag = "arriscado 🔴"
+    else:
+        tag = "incerto ⚠️"
+    return f"\n   🎯 chance de dar certo agora: <b>{prob * 100:.0f}%</b> · {tag}"
+
+
+def _position_line(p: dict, prob: float | None = None) -> str:
+    """Uma posição aberta (HTML do Telegram). `prob` = P(dar certo) na previsão
+    atual, se conhecida."""
     title = html.escape(str(p.get("title", "?")))
     outcome = html.escape(str(p.get("outcome", "?")))
     slug = p.get("eventSlug") or p.get("slug")
@@ -74,12 +126,18 @@ def _position_line(p: dict) -> str:
     return (
         f"{dot} {title} — <b>{outcome}</b>\n"
         f"   {size:,.0f} @ ${avg:.3f} → ${cur:.3f} · "
-        f"{_fmt_signed(pnl)} ({pct:+.0f}%){end_txt}")
+        f"{_fmt_signed(pnl)} ({pct:+.0f}%){end_txt}"
+        f"{_prob_line(prob)}")
 
 
-def positions_message(positions: list[dict]) -> str:
+def positions_message(positions: list[dict], prob_fn=None) -> str:
     """Resumo em HTML do Telegram. Abertas ordenadas por valor atual;
-    resolvidas-a-resgatar num rodapé compacto. String vazia se não há nada."""
+    resolvidas-a-resgatar num rodapé compacto. String vazia se não há nada.
+
+    `prob_fn(position) -> float | None` devolve a probabilidade (0..1) de a
+    posição *dar certo* segundo a previsão atual; None quando não dá para casar
+    o mercado com uma estação/dia."""
+    prob_fn = prob_fn or (lambda _p: None)
     open_pos, redeemable = [], []
     for p in positions:
         if p.get("redeemable"):
@@ -107,7 +165,7 @@ def positions_message(positions: list[dict]) -> str:
     # estourar o limite do sendMessage.
     lines, used, shown = [], 0, 0
     for p in open_pos:
-        line = _position_line(p)
+        line = _position_line(p, prob_fn(p))
         if used + len(line) > BODY_BUDGET:
             break
         lines.append(line)

@@ -30,7 +30,7 @@ import sys
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from sbgr import config, notify, pipeline, polymarket
+from sbgr import config, distribution, notify, pipeline, polymarket
 
 
 def main() -> int:
@@ -54,45 +54,80 @@ def main() -> int:
     icaos = args.station or list(config.STATIONS)
     stations = [config.STATIONS[i] for i in icaos]
 
-    # Rótulo de horário no fuso da primeira estação (referência).
-    now = dt.datetime.now(stations[0].tz)
-    notify.send_message(
-        token, chat_id, notify.digest_header(now.strftime("%d/%m/%Y %H:%M")))
-
-    failures = 0
+    # 1) Monta o contexto de todas as estações antes de enviar qualquer coisa:
+    # as posições (que vão primeiro) dependem das distribuições para estimar a
+    # chance de cada aposta dar certo.
+    contexts: dict[str, dict] = {}
+    errors: dict[str, str] = {}
     for station in stations:
         def log(msg: str, _s=station) -> None:
             print(f"[{_s.icao}] {msg}")
         try:
-            ctx = pipeline.build_context(
+            contexts[station.icao] = pipeline.build_context(
                 station, force_bias=args.force_bias, log=log)
         except Exception as exc:  # noqa: BLE001 — falha de uma estação não derruba o resto
-            failures += 1
+            errors[station.icao] = str(exc)
             print(f"[{station.icao}] ERRO: {exc}", file=sys.stderr)
-            notify.send_message(
-                token, chat_id,
-                f"{station.flag} <b>{station.city} ({station.icao})</b>\n"
-                f"⚠️ Sem dados suficientes agora ({exc}).")
-            continue
 
-        notify.send_photo(token, chat_id, notify.station_chart_png(ctx),
-                          notify.station_lines(ctx))
-        notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
-        print(f"[{station.icao}] enviado.")
+    def position_success_prob(p: dict) -> float | None:
+        """P(a posição dar certo) segundo a previsão atual (última observação +
+        ensemble corrigido); None se o mercado não casa com uma estação/dia que
+        temos."""
+        ev = polymarket.parse_temp_market(p.get("title"))
+        if not ev:
+            return None
+        ctx = contexts.get(ev["icao"])
+        if not ctx:
+            return None
+        try:
+            end_date = dt.date.fromisoformat(str(p.get("endDate") or "")[:10])
+        except ValueError:
+            return None
+        dist = (ctx["dist_d0"] if end_date == ctx["d0"]
+                else ctx["dist_d1"] if end_date == ctx["d1"] else None)
+        p_yes = distribution.market_prob(dist, ev["threshold"], ev["mode"])
+        if p_yes is None:
+            return None
+        outcome = str(p.get("outcome") or "").strip().lower()
+        if outcome == "yes":
+            return p_yes
+        if outcome == "no":
+            return 1.0 - p_yes
+        return None
 
-    # Resumo (somente-leitura) das posições na Polymarket, se a carteira estiver
-    # configurada. Uma falha aqui não invalida a previsão já enviada.
+    # 2) Posições da Polymarket PRIMEIRO (somente-leitura), já com a chance de
+    # cada uma dar certo. Uma falha aqui não impede o envio da previsão.
     wallet = os.environ.get("POLYMARKET_WALLET")
     if wallet and not args.no_positions:
         try:
             positions = polymarket.fetch_positions(wallet)
             notify.send_message(
-                token, chat_id, polymarket.positions_message(positions))
+                token, chat_id,
+                polymarket.positions_message(positions, position_success_prob))
             print("[polymarket] posições enviadas.")
         except Exception as exc:  # noqa: BLE001 — leitura da carteira é acessório
             print(f"[polymarket] ERRO ao ler posições: {exc}", file=sys.stderr)
 
-    return 1 if failures == len(stations) else 0
+    # 3) Previsão: cabeçalho + gráfico (com nowcast) e hora-a-hora por estação,
+    # exatamente como hoje.
+    now = dt.datetime.now(stations[0].tz)
+    notify.send_message(
+        token, chat_id, notify.digest_header(now.strftime("%d/%m/%Y %H:%M")))
+
+    for station in stations:
+        ctx = contexts.get(station.icao)
+        if ctx is None:
+            notify.send_message(
+                token, chat_id,
+                f"{station.flag} <b>{station.city} ({station.icao})</b>\n"
+                f"⚠️ Sem dados suficientes agora ({errors.get(station.icao, '')}).")
+            continue
+        notify.send_photo(token, chat_id, notify.station_chart_png(ctx),
+                          notify.station_lines(ctx))
+        notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
+        print(f"[{station.icao}] enviado.")
+
+    return 1 if len(errors) == len(stations) else 0
 
 
 if __name__ == "__main__":
