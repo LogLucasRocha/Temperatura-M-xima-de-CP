@@ -10,7 +10,8 @@ token e o chat_id guardados como *secrets* do repositório.
 
 Estrutura do envio:
   1. Resumo geral das posições da Polymarket (todas as cidades) + probabilidade
-     de cada uma dar certo.
+     de cada uma dar certo — só quando alguma estação tem novidade no
+     observado; rodada parada não repete o resumo.
   2. Sinais, uma mensagem POR CIDADE: faixas do dia operável em que projetado e
      mercado divergem ≥ EDGE_ALERT_MIN e o lado indicado tem mais de
      EDGE_MIN_CONFIDENCE de chance de acertar (avisado uma vez por faixa).
@@ -114,11 +115,24 @@ def main() -> int:
             return 1.0 - p_yes
         return None
 
+    state = _load_digest_state()
+    station_state = state.get("stations", {})
+
+    # Novidade por estação: observado/projeção diferentes do último envio.
+    # Estação com contexto quebrado conta como novidade (envia o aviso).
+    fps = {s.icao: (_station_fingerprint(contexts[s.icao])
+                    if s.icao in contexts else None) for s in stations}
+    novidade = {s.icao for s in stations
+                if fps[s.icao] is None
+                or station_state.get(s.icao) != fps[s.icao]}
+
     # 2) Bloco geral: posição consolidada na Polymarket (todas as cidades), já
-    # com a chance de cada aposta dar certo. Uma falha aqui não impede o resto.
+    # com a chance de cada aposta dar certo. Só quando alguma estação tem
+    # novidade no observado — rodada parada não repete o resumo. Uma falha
+    # aqui não impede o resto.
     positions: list[dict] = []
     wallet = os.environ.get("POLYMARKET_WALLET")
-    if wallet and not args.no_positions:
+    if wallet and not args.no_positions and novidade:
         try:
             positions = polymarket.fetch_positions(wallet)
             notify.send_message(
@@ -127,8 +141,6 @@ def main() -> int:
             print("[polymarket] posições enviadas.")
         except Exception as exc:  # noqa: BLE001 — leitura da carteira é acessório
             print(f"[polymarket] ERRO ao ler posições: {exc}", file=sys.stderr)
-
-    state = _load_digest_state()
 
     # 3) Sinais, uma mensagem por cidade: faixas do dia operável (D0, ou D+1
     # quando a máxima de hoje travou) em que projetado e mercado divergem o
@@ -155,11 +167,10 @@ def main() -> int:
     # projetado e, por fim, gráfico (nowcast) + hora a hora. Falha de uma
     # parte/estação não derruba o resto. Estação sem novidade (mesma assinatura
     # do último envio bem-sucedido) é omitida.
-    station_state = state.get("stations", {})
     for station in stations:
         ctx = contexts.get(station.icao)
-        fp = _station_fingerprint(ctx) if ctx is not None else None
-        if fp is not None and station_state.get(station.icao) == fp:
+        fp = fps[station.icao]
+        if station.icao not in novidade:
             print(f"[{station.icao}] sem novidade na projeção; bloco omitido.")
             continue
         try:
