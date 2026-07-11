@@ -283,3 +283,46 @@ def positions_message(positions: list[dict], prob_fn=None) -> str:
             f"(~{_fmt_money(val)}).")
 
     return "\n\n".join(blocks)
+
+
+def station_positions_message(station, positions: list[dict],
+                              prob_fn=None) -> str:
+    """Posições abertas de UMA estação (HTML do Telegram): só os mercados de
+    temperatura cuja cidade resolve nela, cada um com a chance de dar certo.
+
+    `prob_fn(position) -> float | None` como em `positions_message`. String
+    vazia se a carteira não tem posição aberta nessa estação."""
+    prob_fn = prob_fn or (lambda _p: None)
+    mine = []
+    for p in positions:
+        if p.get("redeemable"):
+            continue
+        if float(p.get("currentValue") or 0) < DUST_USD:
+            continue
+        ev = parse_temp_market(p.get("title"))
+        if ev and ev["icao"] == station.icao:
+            mine.append(p)
+    if not mine:
+        return ""
+
+    mine.sort(key=lambda p: float(p.get("currentValue") or 0), reverse=True)
+    total_val = sum(float(p.get("currentValue") or 0) for p in mine)
+    total_pnl = sum(float(p.get("cashPnl") or 0) for p in mine)
+
+    head = (f"💼 <b>Posições — {html.escape(station.city)}</b> · "
+            f"{len(mine)} aberta(s) · {_fmt_money(total_val)} · "
+            f"P&amp;L {_fmt_signed(total_pnl)}")
+
+    lines, used, shown = [], 0, 0
+    for p in mine:
+        line = _position_line(p, prob_fn(p))
+        if used + len(line) > BODY_BUDGET:
+            break
+        lines.append(line)
+        used += len(line) + 2
+        shown += 1
+    blocks = [head, "\n\n".join(lines)]
+    if shown < len(mine):
+        blocks.append(f"<i>… e mais {len(mine) - shown} posição(ões) "
+                      "(menores, omitidas por espaço).</i>")
+    return "\n\n".join(blocks)

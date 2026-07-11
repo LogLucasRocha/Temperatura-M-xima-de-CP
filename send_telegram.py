@@ -5,10 +5,14 @@ Uso local:
     set TELEGRAM_CHAT_ID=987654321
     python send_telegram.py [--station SBGR ...]
 
-Na nuvem roda pelo GitHub Actions (.github/workflows/telegram.yml), com o
+Na nuvem roda pelo GitHub Actions (.github/workflows/main.yml), com o
 token e o chat_id guardados como *secrets* do repositório.
 
-Um envio = uma mensagem-resumo com as estações + um gráfico (PNG) por estação.
+Estrutura do envio:
+  1. Resumo geral das posições da Polymarket (todas as cidades) + probabilidade
+     de cada uma dar certo.
+  2. Um bloco por estação: posições daquela cidade, tabela mercado × nossa
+     probabilidade e o gráfico (nowcast + distribuições) com o hora a hora.
 """
 from __future__ import annotations
 
@@ -99,8 +103,8 @@ def main() -> int:
             return 1.0 - p_yes
         return None
 
-    # 2) Posições da Polymarket PRIMEIRO (somente-leitura), já com a chance de
-    # cada uma dar certo. Uma falha aqui não impede o envio da previsão.
+    # 2) Bloco geral: posição consolidada na Polymarket (todas as cidades), já
+    # com a chance de cada aposta dar certo. Uma falha aqui não impede o resto.
     positions: list[dict] = []
     wallet = os.environ.get("POLYMARKET_WALLET")
     if wallet and not args.no_positions:
@@ -113,33 +117,32 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 — leitura da carteira é acessório
             print(f"[polymarket] ERRO ao ler posições: {exc}", file=sys.stderr)
 
-    # 3) Previsão: cabeçalho + gráfico (com nowcast) e hora-a-hora por estação,
-    # exatamente como hoje.
     now = dt.datetime.now(stations[0].tz)
     notify.send_message(
         token, chat_id, notify.digest_header(now.strftime("%d/%m/%Y %H:%M")))
 
+    # 3) Um bloco por estação: divisor, posições da cidade, tabela mercado ×
+    # nossa probabilidade e, por fim, gráfico (nowcast) + hora a hora. Falha de
+    # uma parte/estação não derruba o resto.
     for station in stations:
         ctx = contexts.get(station.icao)
+        notify.send_message(token, chat_id, notify.station_divider(station))
+
+        # 3a) posições abertas desta cidade, com a chance de dar certo
+        if positions:
+            msg = polymarket.station_positions_message(
+                station, positions, position_success_prob)
+            if msg:
+                notify.send_message(token, chat_id, msg)
+
         if ctx is None:
             notify.send_message(
                 token, chat_id,
-                f"{station.flag} <b>{station.city} ({station.icao})</b>\n"
-                f"⚠️ Sem dados suficientes agora ({errors.get(station.icao, '')}).")
+                f"⚠️ Sem dados suficientes agora "
+                f"({errors.get(station.icao, '')}).")
             continue
-        notify.send_photo(token, chat_id, notify.station_chart_png(ctx),
-                          notify.station_lines(ctx))
-        notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
-        print(f"[{station.icao}] enviado.")
 
-    # 4) No fim de tudo: para CADA estação acompanhada, uma tabela (PNG) por dia
-    # (hoje e amanhã) com todas as faixas — odd de Yes/No do mercado vs. a nossa
-    # probabilidade de acontecer. Independe de ter posição. Falha de uma estação
-    # não derruba o resto.
-    for station in stations:
-        ctx = contexts.get(station.icao)
-        if ctx is None:
-            continue
+        # 3b) tabela: probabilidade real vs. preço do mercado (hoje e amanhã)
         day_tables: list[tuple] = []
         for day_label, date in (("Hoje", ctx["d0"]), ("Amanhã", ctx["d1"])):
             slug = polymarket.event_slug(station.icao, date)
@@ -153,18 +156,24 @@ def main() -> int:
             rows = polymarket.odds_rows(event, yes_prob)
             if rows:
                 day_tables.append((day_label, date, rows))
-        if not day_tables:
+        if day_tables:
+            try:
+                notify.send_photo(token, chat_id,
+                                  notify.odds_table_png(station, day_tables),
+                                  notify.odds_caption(station))
+                print(f"[{station.icao}] tabela de odds enviada "
+                      f"({len(day_tables)} dia(s)).")
+            except Exception as exc:  # noqa: BLE001 — tabela é acessória
+                print(f"[{station.icao}] ERRO ao enviar tabela: {exc}",
+                      file=sys.stderr)
+        else:
             print(f"[{station.icao}] sem mercado de odds relevante.")
-            continue
-        try:
-            notify.send_photo(token, chat_id,
-                              notify.odds_table_png(station, day_tables),
-                              notify.odds_caption(station))
-            print(f"[{station.icao}] tabela de odds enviada "
-                  f"({len(day_tables)} dia(s)).")
-        except Exception as exc:  # noqa: BLE001 — tabela é acessória
-            print(f"[{station.icao}] ERRO ao enviar tabela: {exc}",
-                  file=sys.stderr)
+
+        # 3c) gráfico com nowcast + distribuições e o hora a hora
+        notify.send_photo(token, chat_id, notify.station_chart_png(ctx),
+                          notify.station_lines(ctx))
+        notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
+        print(f"[{station.icao}] enviado.")
 
     return 1 if len(errors) == len(stations) else 0
 

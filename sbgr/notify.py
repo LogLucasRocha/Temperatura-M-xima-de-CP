@@ -285,6 +285,14 @@ def digest_header(when_label: str) -> str:
             "Mediana e P10–P90 do ensemble corrigido; ≥X = prob. de exceder.")
 
 
+def station_divider(station) -> str:
+    """Separador visual que abre o bloco de uma estação no digest."""
+    return (f"━━━━━━━━━━━━━━━\n"
+            f"{station.flag} <b>{html.escape(station.city).upper()} "
+            f"({station.icao})</b>\n"
+            f"━━━━━━━━━━━━━━━")
+
+
 # ----------------------------------------------------------- envio Telegram
 
 def send_message(token: str, chat_id: str, text: str) -> None:
