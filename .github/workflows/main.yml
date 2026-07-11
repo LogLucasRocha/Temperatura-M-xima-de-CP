@@ -1,0 +1,30 @@
+name: Previsão Tmax → Telegram
+
+on:
+  schedule:
+    # Horários em UTC. Brasil (UTC-3): 12:00 UTC = 09:00 / 21:00 UTC = 18:00
+    - cron: "0 12 * * *"
+    - cron: "0 21 * * *"
+  workflow_dispatch:        # permite rodar manualmente pelo botão "Run workflow"
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Enviar previsão pro Telegram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python send_telegram.py
