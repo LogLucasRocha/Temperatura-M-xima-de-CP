@@ -226,25 +226,33 @@ def _is_edge(row: dict) -> bool:
 
 
 def _edges_messages(edges: dict, prev_probs: dict) -> list[tuple[str, str]]:
-    """Mensagens de sinais, uma POR CIDADE: [(icao, texto HTML)]. Cada linha
-    traz o projetado da rodada anterior para mostrar de onde a projeção veio."""
+    """Mensagens de sinais, uma POR CIDADE: [(icao, texto HTML)]. Cada linha é
+    uma ação (Comprar SIM ou Comprar NÃO) com as probabilidades DO LADO
+    COMPRADO — mercado × modelo — e o modelo da rodada anterior."""
     by_icao: dict[str, list[str]] = {}
     for key, e in edges.items():
-        diff = (e["mp"] - e["yes"]) * 100
-        side = "Yes barato" if diff > 0 else "Yes caro"
         prev_mp = prev_probs.get(key, {}).get("mp")
-        antes = ("antes —" if prev_mp is None
-                 else f"antes {prev_mp * 100:.0f}%")
+        if e["mp"] > e["yes"]:          # Yes subvalorizado pelo mercado
+            dot, acao = "🟢", "Comprar SIM"
+            mkt, mdl = e["yes"], e["mp"]
+            prev_side = prev_mp
+        else:                            # Yes sobrevalorizado → comprar o Não
+            dot, acao = "🔴", "Comprar NÃO"
+            mkt, mdl = 1.0 - e["yes"], 1.0 - e["mp"]
+            prev_side = None if prev_mp is None else 1.0 - prev_mp
+        antes = ("antes —" if prev_side is None
+                 else f"antes {prev_side * 100:.0f}%")
         by_icao.setdefault(e["icao"], []).append(
-            f"<b>{html.escape(e['label'])}</b> ({e['day_label']}): "
-            f"mercado {e['yes'] * 100:.0f}% vs projetado {e['mp'] * 100:.0f}% "
-            f"({antes}) · {diff:+.0f} p.p. → {side}")
+            f"{dot} <b>{acao}</b> — <b>{html.escape(e['label'])}</b> "
+            f"({e['day_label']}): mercado {mkt * 100:.0f}% × "
+            f"modelo {mdl * 100:.0f}% ({antes})")
     out = []
     for icao, lines in by_icao.items():
         st = config.STATIONS[icao]
         head = (f"🚨 <b>Sinais — {html.escape(st.city)}</b> {st.flag} · "
-                f"divergência ≥ {config.EDGE_ALERT_MIN * 100:.0f} p.p. e "
-                f"confiança &gt; {config.EDGE_MIN_CONFIDENCE * 100:.0f}%")
+                f"mercado × modelo no lado comprado · edge ≥ "
+                f"{config.EDGE_ALERT_MIN * 100:.0f} p.p., modelo &gt; "
+                f"{config.EDGE_MIN_CONFIDENCE * 100:.0f}%")
         out.append((icao, "\n".join([head, *lines])))
     return out
 
