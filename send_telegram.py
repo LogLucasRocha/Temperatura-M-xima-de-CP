@@ -11,10 +11,14 @@ token e o chat_id guardados como *secrets* do repositório.
 Estrutura do envio:
   1. Resumo geral das posições da Polymarket (todas as cidades) + probabilidade
      de cada uma dar certo.
-  2. Sinais: faixas do D0 em que projetado e mercado divergem ≥ EDGE_ALERT_MIN
-     (avisado uma vez por faixa, ao cruzar o corte).
+  2. Sinais, uma mensagem POR CIDADE: faixas do dia operável em que projetado e
+     mercado divergem ≥ EDGE_ALERT_MIN e o lado indicado tem mais de
+     EDGE_MIN_CONFIDENCE de chance de acertar (avisado uma vez por faixa).
   3. Um bloco por estação: posições daquela cidade, tabela mercado × projetado
      e o gráfico (nowcast + distribuições) com o hora a hora.
+
+Quando a máxima de hoje já travou (TMAX_LOCK_HOURS), o D0 sai de cena na
+estação: sinais, tabela, distribuição e hora a hora focam no dia seguinte.
 
 Estações sem novidade desde o último envio (mesmo observado e mesma projeção,
 comparados via data/digest_state.json) são omitidas do digest.
@@ -130,25 +134,26 @@ def main() -> int:
 
     state = _load_digest_state()
 
-    # 3) Sinais: faixas do D0 em que projetado e mercado divergem o suficiente
-    # para interessar. Cada faixa avisa UMA vez ao cruzar o corte (o estado
-    # guarda as que já estão acima; a virada do dia re-arma tudo, porque a
-    # data faz parte da chave). O estado também guarda o projetado de TODAS as
-    # faixas da rodada anterior, para o sinal mostrar de onde a projeção veio.
-    d0_rows = _collect_d0_rows(stations, contexts, yes_prob)
-    prev_probs = state.get("d0_probs", {})
-    edges_now = {k: v for k, v in d0_rows.items()
-                 if abs(v["mp"] - v["yes"]) >= config.EDGE_ALERT_MIN}
+    # 3) Sinais, uma mensagem por cidade: faixas do dia operável (D0, ou D+1
+    # quando a máxima de hoje travou) em que projetado e mercado divergem o
+    # suficiente E o lado indicado tem confiança alta. Cada faixa avisa UMA
+    # vez ao cruzar o corte (o estado guarda as que já estão acima; a data na
+    # chave re-arma tudo na virada do dia). O estado também guarda o projetado
+    # de TODAS as faixas da rodada anterior, para mostrar de onde veio.
+    signal_rows = _collect_signal_rows(stations, contexts, yes_prob)
+    prev_probs = state.get("signal_probs", {})
+    edges_now = {k: v for k, v in signal_rows.items() if _is_edge(v)}
     prev_edges = state.get("edges", {})
     new_edges = {k: v for k, v in edges_now.items() if k not in prev_edges}
-    if new_edges:
+    for icao, text in _edges_messages(new_edges, prev_probs):
         try:
-            notify.send_message(token, chat_id,
-                                _edges_message(new_edges, prev_probs))
-            print(f"[sinais] {len(new_edges)} sinal(is) enviado(s).")
+            notify.send_message(token, chat_id, text)
+            print(f"[sinais] {icao}: sinal(is) enviado(s).")
         except Exception as exc:  # noqa: BLE001 — sinal é acessório
-            print(f"[sinais] ERRO ao enviar: {exc}", file=sys.stderr)
-            edges_now = prev_edges  # não marca como avisado; tenta na próxima
+            print(f"[sinais] {icao}: ERRO ao enviar: {exc}", file=sys.stderr)
+            # não marca as faixas dessa cidade como avisadas; tenta na próxima
+            for k in [k for k, v in new_edges.items() if v["icao"] == icao]:
+                edges_now.pop(k, None)
 
     # 4) Um bloco por estação: divisor, posições da cidade, tabela mercado ×
     # projetado e, por fim, gráfico (nowcast) + hora a hora. Falha de uma
@@ -171,22 +176,27 @@ def main() -> int:
             if fp is not None:
                 station_state[station.icao] = fp
     _save_digest_state({"stations": station_state, "edges": edges_now,
-                        "d0_probs": d0_rows})
+                        "signal_probs": signal_rows})
 
     return 1 if len(errors) == len(stations) else 0
 
 
-def _collect_d0_rows(stations, contexts, yes_prob) -> dict:
-    """Todas as faixas do D0 com preço e projeção, indexadas por
+def _collect_signal_rows(stations, contexts, yes_prob) -> dict:
+    """Todas as faixas do dia operável de cada estação (D0; D+1 quando a
+    máxima de hoje já travou), com preço e projeção, indexadas por
     "icao:data:faixa" (a data na chave re-arma os sinais na virada do dia).
-    Cada valor: {icao, label, yes, mp}. Normalizado via JSON para comparar com
-    o estado salvo em disco."""
+    Cada valor: {icao, day_label, label, yes, mp}. Normalizado via JSON para
+    comparar com o estado salvo em disco."""
     rows: dict = {}
     for station in stations:
         ctx = contexts.get(station.icao)
         if ctx is None:
             continue
-        slug = polymarket.event_slug(station.icao, ctx["d0"])
+        if ctx["tmax_locked"]:
+            day, day_label = ctx["d1"], "amanhã"
+        else:
+            day, day_label = ctx["d0"], "hoje"
+        slug = polymarket.event_slug(station.icao, day)
         if not slug:
             continue
         try:
@@ -197,29 +207,46 @@ def _collect_d0_rows(stations, contexts, yes_prob) -> dict:
         for r in polymarket.odds_rows(event, yes_prob):
             if r["yes"] is None or r["mp"] is None:
                 continue
-            key = f"{station.icao}:{ctx['d0'].isoformat()}:{r['label']}"
+            key = f"{station.icao}:{day.isoformat()}:{r['label']}"
             rows[key] = {"icao": station.icao, "label": r["label"],
+                         "day_label": f"{day_label} {day.strftime('%d/%m')}",
                          "yes": r["yes"], "mp": r["mp"]}
     return json.loads(json.dumps(rows))
 
 
-def _edges_message(edges: dict, prev_probs: dict) -> str:
-    """Mensagem de sinais (HTML do Telegram): uma linha por faixa divergente,
-    com o projetado da rodada anterior para mostrar de onde a projeção veio."""
-    lines = [f"🚨 <b>Sinais — hoje (D0)</b> · divergência ≥ "
-             f"{config.EDGE_ALERT_MIN * 100:.0f} p.p. entre mercado e projetado"]
+def _is_edge(row: dict) -> bool:
+    """Sinal acionável: divergência mínima E o lado indicado (comprar Yes se
+    está barato, No se está caro) com mais de EDGE_MIN_CONFIDENCE de chance de
+    acertar segundo a projeção."""
+    diff = row["mp"] - row["yes"]
+    if abs(diff) < config.EDGE_ALERT_MIN:
+        return False
+    side_prob = row["mp"] if diff > 0 else 1.0 - row["mp"]
+    return side_prob > config.EDGE_MIN_CONFIDENCE
+
+
+def _edges_messages(edges: dict, prev_probs: dict) -> list[tuple[str, str]]:
+    """Mensagens de sinais, uma POR CIDADE: [(icao, texto HTML)]. Cada linha
+    traz o projetado da rodada anterior para mostrar de onde a projeção veio."""
+    by_icao: dict[str, list[str]] = {}
     for key, e in edges.items():
-        st = config.STATIONS[e["icao"]]
         diff = (e["mp"] - e["yes"]) * 100
         side = "Yes barato" if diff > 0 else "Yes caro"
         prev_mp = prev_probs.get(key, {}).get("mp")
         antes = ("antes —" if prev_mp is None
                  else f"antes {prev_mp * 100:.0f}%")
-        lines.append(
-            f"{st.flag} {st.city} · <b>{html.escape(e['label'])}</b>: "
+        by_icao.setdefault(e["icao"], []).append(
+            f"<b>{html.escape(e['label'])}</b> ({e['day_label']}): "
             f"mercado {e['yes'] * 100:.0f}% vs projetado {e['mp'] * 100:.0f}% "
             f"({antes}) · {diff:+.0f} p.p. → {side}")
-    return "\n".join(lines)
+    out = []
+    for icao, lines in by_icao.items():
+        st = config.STATIONS[icao]
+        head = (f"🚨 <b>Sinais — {html.escape(st.city)}</b> {st.flag} · "
+                f"divergência ≥ {config.EDGE_ALERT_MIN * 100:.0f} p.p. e "
+                f"confiança &gt; {config.EDGE_MIN_CONFIDENCE * 100:.0f}%")
+        out.append((icao, "\n".join([head, *lines])))
+    return out
 
 
 def _station_fingerprint(ctx: dict) -> dict:
@@ -272,9 +299,12 @@ def _send_station_block(token, chat_id, station, ctx, positions,
             f"({errors.get(station.icao, '')}).")
         return
 
-    # 4b) tabela: probabilidade real vs. preço do mercado (hoje e amanhã)
+    # 4b) tabela: probabilidade real vs. preço do mercado. Com a máxima de
+    # hoje travada o mercado do D0 está resolvido — mostra só o de amanhã.
+    days = ((("Amanhã", ctx["d1"]),) if ctx["tmax_locked"]
+            else (("Hoje", ctx["d0"]), ("Amanhã", ctx["d1"])))
     day_tables: list[tuple] = []
-    for day_label, date in (("Hoje", ctx["d0"]), ("Amanhã", ctx["d1"])):
+    for day_label, date in days:
         slug = polymarket.event_slug(station.icao, date)
         if not slug:
             continue

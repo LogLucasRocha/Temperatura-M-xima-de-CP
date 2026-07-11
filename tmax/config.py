@@ -105,10 +105,16 @@ TMAX_LOCK_HOURS = 3
 # Estado do último digest enviado (para omitir estações sem novidade)
 DIGEST_STATE_FILE = DATA_DIR / "digest_state.json"
 
-# Sinal de edge: divergência mínima |projetado − mercado| numa faixa do D0
-# que dispara a mensagem de alerta. Cada faixa avisa uma vez ao cruzar o
-# corte e re-arma quando cai abaixo dele (ou na virada do dia).
+# Sinal de edge: divergência mínima |projetado − mercado| numa faixa do dia
+# operável (D0; D+1 quando a máxima de hoje já travou) que dispara a mensagem
+# de alerta. Cada faixa avisa uma vez ao cruzar o corte e re-arma quando cai
+# abaixo dele (ou na virada do dia).
 EDGE_ALERT_MIN = 0.05
+
+# Confiança mínima do lado indicado pelo sinal: só alerta quando a projeção
+# dá mais de 90% de chance de a aposta sugerida acertar (P(Yes) se o Yes está
+# barato; 1 − P(Yes) se está caro).
+EDGE_MIN_CONFIDENCE = 0.90
 
 # Inflação de incerteza para D+1 (erro cresce com o horizonte)
 D1_STD_INFLATION = 1.15
