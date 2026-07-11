@@ -74,6 +74,7 @@ def main() -> int:
 
         notify.send_photo(token, chat_id, notify.station_chart_png(ctx),
                           notify.station_lines(ctx))
+        notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
         print(f"[{station.icao}] enviado.")
 
     return 1 if failures == len(stations) else 0

@@ -124,28 +124,80 @@ def _exceed_summary(dist: dict) -> str:
 
 
 def station_lines(ctx: dict) -> str:
-    """Bloco de texto (HTML do Telegram) de uma estação."""
+    """Legenda (HTML do Telegram) do gráfico de uma estação. Cada tópico é um
+    parágrafo separado por linha em branco, para não se perder na leitura."""
     s = ctx["station"]
     q0, q1 = ctx["dist_d0"]["quantiles"], ctx["dist_d1"]["quantiles"]
-    lines = [f"{s.flag} <b>{html.escape(s.city)} ({s.icao})</b>"]
 
+    head = [f"{s.flag} <b>{html.escape(s.city)} ({s.icao})</b>"]
     if ctx["latest_metar"]:
         agora = f"Agora: <b>{ctx['latest_metar']['temp']:.0f} °C</b>"
         if ctx["obs_max_today"] is not None:
             agora += f" · máx. já hoje: {ctx['obs_max_today']:.0f} °C"
-        lines.append(agora)
+        head.append(agora)
+    blocks = ["\n".join(head)]
+
+    if ctx["nowcast"]:
+        nc = ctx["nowcast"]
+        direction = "mais quente" if nc["offset"] > 0 else "mais frio"
+        blocks.append(
+            f"📡 <b>Nowcast:</b> nas últimas {nc['n_hours']}h o observado está "
+            f"<b>{abs(nc['offset']):.1f} °C {direction}</b> que o ensemble "
+            f"corrigido → ajuste de <b>{nc['shift']:+.1f} °C</b> nas horas "
+            "restantes de hoje.")
 
     taf0 = f" · TAF {ctx['taf_tx_d0']:.0f}" if ctx["taf_tx_d0"] is not None else ""
-    taf1 = f" · TAF {ctx['taf_tx_d1']:.0f}" if ctx["taf_tx_d1"] is not None else ""
-    lines.append(
+    blocks.append(
         f"Hoje {ctx['d0'].strftime('%d/%m')}: <b>{q0[50]:.1f} °C</b> "
-        f"(P10–P90 {q0[10]:.1f}–{q0[90]:.1f}){taf0}")
-    lines.append(f"  {_exceed_summary(ctx['dist_d0'])}")
-    lines.append(
+        f"(P10–P90 {q0[10]:.1f}–{q0[90]:.1f}){taf0}\n"
+        f"{_exceed_summary(ctx['dist_d0'])}")
+
+    taf1 = f" · TAF {ctx['taf_tx_d1']:.0f}" if ctx["taf_tx_d1"] is not None else ""
+    blocks.append(
         f"Amanhã {ctx['d1'].strftime('%d/%m')}: <b>{q1[50]:.1f} °C</b> "
-        f"(P10–P90 {q1[10]:.1f}–{q1[90]:.1f}){taf1}")
-    lines.append(f"  {_exceed_summary(ctx['dist_d1'])}")
-    return "\n".join(lines)
+        f"(P10–P90 {q1[10]:.1f}–{q1[90]:.1f}){taf1}\n"
+        f"{_exceed_summary(ctx['dist_d1'])}")
+
+    return "\n\n".join(blocks)
+
+
+def station_hourly_lines(ctx: dict) -> str:
+    """Mensagem separada com a trajetória hora a hora (a mesma do gráfico):
+    mediana corrigida + faixa P10–P90 por hora, agrupada por dia. Vai como
+    `sendMessage` (limite de 4096) e não na legenda do gráfico (limite 1024)."""
+    s = ctx["station"]
+    times, p10, p50, p90, _raw = hourly_percentiles(
+        ctx["ens"]["time"], ctx["ens"]["members"], ctx["bias"],
+        ctx["shift"], ctx["now"], days={ctx["d0"], ctx["d1"]})
+
+    # Observado por hora, para marcar as horas já decorridas de hoje.
+    obs_by_hour = {
+        o["time"].replace(minute=0, second=0, microsecond=0): o["temp"]
+        for o in ctx["obs_today"]}
+
+    blocks = [f"{s.flag} <b>{html.escape(s.city)} ({s.icao})</b> — hora a hora\n"
+              "<i>mediana corrigida · faixa P10–P90 · obs = METAR observado</i>"]
+
+    current_day = None
+    day_lines: list[str] = []
+    for t, lo, md, hi in zip(times, p10, p50, p90):
+        if md is None:
+            continue
+        if t.date() != current_day:
+            if day_lines:
+                blocks.append("\n".join(day_lines))
+            current_day = t.date()
+            label = "Hoje" if current_day == ctx["d0"] else "Amanhã"
+            day_lines = [f"<b>{label} {current_day.strftime('%d/%m')}</b>"]
+        obs = obs_by_hour.get(t.replace(minute=0, second=0, microsecond=0))
+        line = f"{t.strftime('%Hh')}  <b>{md:.1f}°</b> (P10–P90 {lo:.0f}–{hi:.0f})"
+        if obs is not None:
+            line += f" · obs {obs:.0f}°"
+        day_lines.append(line)
+    if day_lines:
+        blocks.append("\n".join(day_lines))
+
+    return "\n\n".join(blocks)
 
 
 def digest_header(when_label: str) -> str:
