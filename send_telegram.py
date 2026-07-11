@@ -30,7 +30,7 @@ import sys
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from sbgr import config, notify, pipeline
+from sbgr import config, notify, pipeline, polymarket
 
 
 def main() -> int:
@@ -39,6 +39,9 @@ def main() -> int:
                     help="estação a incluir (repetível; padrão: todas)")
     ap.add_argument("--force-bias", action="store_true",
                     help="recalcula a correção de viés mesmo com cache válido")
+    ap.add_argument("--no-positions", action="store_true",
+                    help="não anexa o resumo de posições da Polymarket "
+                         "(mesmo com POLYMARKET_WALLET definido)")
     args = ap.parse_args()
 
     token = os.environ.get("TELEGRAM_TOKEN")
@@ -76,6 +79,18 @@ def main() -> int:
                           notify.station_lines(ctx))
         notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
         print(f"[{station.icao}] enviado.")
+
+    # Resumo (somente-leitura) das posições na Polymarket, se a carteira estiver
+    # configurada. Uma falha aqui não invalida a previsão já enviada.
+    wallet = os.environ.get("POLYMARKET_WALLET")
+    if wallet and not args.no_positions:
+        try:
+            positions = polymarket.fetch_positions(wallet)
+            notify.send_message(
+                token, chat_id, polymarket.positions_message(positions))
+            print("[polymarket] posições enviadas.")
+        except Exception as exc:  # noqa: BLE001 — leitura da carteira é acessório
+            print(f"[polymarket] ERRO ao ler posições: {exc}", file=sys.stderr)
 
     return 1 if failures == len(stations) else 0
 
