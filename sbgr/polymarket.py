@@ -13,6 +13,7 @@ A Data-API devolve uma lista de posições; os campos que usamos:
 from __future__ import annotations
 
 import html
+import json
 import re
 
 import requests
@@ -20,6 +21,7 @@ import requests
 from . import config
 
 DATA_API = "https://data-api.polymarket.com"
+GAMMA_API = "https://gamma-api.polymarket.com"
 
 # Cidade no título do mercado (em inglês) → ICAO da estação que resolve o
 # mercado. Cidades fora deste mapa (ex.: Seoul) ficam sem probabilidade.
@@ -79,6 +81,96 @@ def fetch_positions(wallet: str, timeout: int = 30) -> list[dict]:
     r.raise_for_status()
     data = r.json()
     return data if isinstance(data, list) else []
+
+
+def _as_list(v) -> list:
+    """A Gamma devolve `outcomes`/`outcomePrices` ora como lista, ora como string
+    JSON ('["Yes","No"]'). Normaliza para lista."""
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        try:
+            out = json.loads(v)
+            return out if isinstance(out, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def fetch_event(slug: str, timeout: int = 30) -> dict:
+    """Escada completa de um evento de temperatura via Gamma API: cada faixa
+    (market) com preço de Yes/No. Levanta em erro HTTP.
+
+    Retorna {title, end, rows:[{question, label, yes, no}]} — `yes`/`no` são os
+    preços de mercado (0..1 = prob. implícita) ou None."""
+    r = requests.get(
+        f"{GAMMA_API}/events", params={"slug": slug},
+        headers={"User-Agent": config.USER_AGENT}, timeout=timeout)
+    r.raise_for_status()
+    data = r.json()
+    ev = data[0] if isinstance(data, list) and data else data
+    if not isinstance(ev, dict):
+        return {"title": slug, "end": None, "rows": []}
+
+    rows = []
+    for m in ev.get("markets", []):
+        outcomes = [str(o).strip().lower() for o in _as_list(m.get("outcomes"))]
+        prices = _as_list(m.get("outcomePrices"))
+        yes = no = None
+        for o, price in zip(outcomes, prices):
+            try:
+                fp = float(price)
+            except (TypeError, ValueError):
+                continue
+            if o == "yes":
+                yes = fp
+            elif o == "no":
+                no = fp
+        rows.append({
+            "question": m.get("question"),
+            "label": m.get("groupItemTitle") or m.get("question") or "?",
+            "yes": yes, "no": no,
+        })
+    return {"title": ev.get("title") or slug,
+            "end": ev.get("endDate"), "rows": rows}
+
+
+def _pct(v: float | None) -> str:
+    return "—" if v is None else f"{v * 100:.0f}%"
+
+
+def odds_table_message(event: dict, prob_fn=None) -> str:
+    """Tabela (HTML do Telegram) das faixas de um evento: preço de Yes/No do
+    mercado vs. a nossa probabilidade de o Yes acontecer.
+
+    `prob_fn(question, end) -> float | None` devolve a nossa prob. do Yes; None
+    quando não sabemos casar com uma estação/dia. String vazia se não há nada
+    relevante a mostrar."""
+    prob_fn = prob_fn or (lambda _q, _e: None)
+    end = event.get("end")
+    lines = []
+    for r in event.get("rows", []):
+        yes, no = r.get("yes"), r.get("no")
+        mp = prob_fn(r.get("question"), end)
+        # Corta as faixas irrelevantes (mercado ~0 e nossa previsão ~0).
+        if (yes or 0) < 0.01 and (mp or 0) < 0.01:
+            continue
+        lines.append((str(r.get("label") or "?"), yes, no, mp))
+    if not lines:
+        return ""
+
+    width = max(len(lbl) for lbl, *_ in lines)
+    body = (f"{'Faixa':<{width}} {'Yes':>5} {'No':>5} "
+            f"{'Sim':>5} {'Não':>5}\n")
+    for lbl, yes, no, mp in lines:
+        mp_no = None if mp is None else 1.0 - mp
+        body += (f"{lbl:<{width}} {_pct(yes):>5} {_pct(no):>5} "
+                 f"{_pct(mp):>5} {_pct(mp_no):>5}\n")
+
+    head = (f"📊 <b>{html.escape(str(event.get('title', '?')))}</b>\n"
+            "<i>Yes/No = preço do mercado (prob. implícita) · "
+            "Sim/Não = nossa previsão de o resultado acontecer.</i>")
+    return f"{head}\n<pre>{html.escape(body)}</pre>"
 
 
 def _fmt_money(v: float) -> str:

@@ -69,23 +69,27 @@ def main() -> int:
             errors[station.icao] = str(exc)
             print(f"[{station.icao}] ERRO: {exc}", file=sys.stderr)
 
-    def position_success_prob(p: dict) -> float | None:
-        """P(a posição dar certo) segundo a previsão atual (última observação +
-        ensemble corrigido); None se o mercado não casa com uma estação/dia que
-        temos."""
-        ev = polymarket.parse_temp_market(p.get("title"))
+    def yes_prob(title: str | None, end_iso) -> float | None:
+        """Nossa P(o Yes acontecer) para um mercado de máxima, pela previsão
+        atual (última observação + ensemble corrigido). None se o mercado não
+        casa com uma estação/dia que temos."""
+        ev = polymarket.parse_temp_market(title)
         if not ev:
             return None
         ctx = contexts.get(ev["icao"])
         if not ctx:
             return None
         try:
-            end_date = dt.date.fromisoformat(str(p.get("endDate") or "")[:10])
+            end_date = dt.date.fromisoformat(str(end_iso or "")[:10])
         except ValueError:
             return None
         dist = (ctx["dist_d0"] if end_date == ctx["d0"]
                 else ctx["dist_d1"] if end_date == ctx["d1"] else None)
-        p_yes = distribution.market_prob(dist, ev["threshold"], ev["mode"])
+        return distribution.market_prob(dist, ev["threshold"], ev["mode"])
+
+    def position_success_prob(p: dict) -> float | None:
+        """P(a posição dar certo): P(Yes) se apostou Yes, senão 1−P(Yes)."""
+        p_yes = yes_prob(p.get("title"), p.get("endDate"))
         if p_yes is None:
             return None
         outcome = str(p.get("outcome") or "").strip().lower()
@@ -97,6 +101,7 @@ def main() -> int:
 
     # 2) Posições da Polymarket PRIMEIRO (somente-leitura), já com a chance de
     # cada uma dar certo. Uma falha aqui não impede o envio da previsão.
+    positions: list[dict] = []
     wallet = os.environ.get("POLYMARKET_WALLET")
     if wallet and not args.no_positions:
         try:
@@ -126,6 +131,32 @@ def main() -> int:
                           notify.station_lines(ctx))
         notify.send_message(token, chat_id, notify.station_hourly_lines(ctx))
         print(f"[{station.icao}] enviado.")
+
+    # 4) No fim de tudo: para cada evento em que você tem posição aberta de
+    # temperatura, uma tabela com todas as faixas — odd de Yes/No do mercado vs.
+    # a nossa probabilidade de acontecer. Falha aqui não derruba o resto.
+    if not args.no_positions:
+        seen_slugs: list[str] = []
+        for p in positions:
+            if p.get("redeemable"):
+                continue
+            if float(p.get("currentValue") or 0) < polymarket.DUST_USD:
+                continue
+            if not polymarket.parse_temp_market(p.get("title")):
+                continue
+            slug = p.get("eventSlug") or p.get("slug")
+            if slug and slug not in seen_slugs:
+                seen_slugs.append(slug)
+        for slug in seen_slugs:
+            try:
+                event = polymarket.fetch_event(slug)
+                msg = polymarket.odds_table_message(event, yes_prob)
+                if msg:
+                    notify.send_message(token, chat_id, msg)
+                    print(f"[polymarket] tabela de odds enviada ({slug}).")
+            except Exception as exc:  # noqa: BLE001 — tabela é acessória
+                print(f"[polymarket] ERRO tabela {slug}: {exc}",
+                      file=sys.stderr)
 
     return 1 if len(errors) == len(stations) else 0
 
