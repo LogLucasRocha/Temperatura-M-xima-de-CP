@@ -199,9 +199,10 @@ def main() -> int:
     # projetado e, por fim, gráfico (nowcast) + hora a hora. Falha de uma
     # parte/estação não derruba o resto. Estação sem novidade (mesma assinatura
     # do último envio bem-sucedido) é omitida.
-    # Com muitas cidades, o bloco completo só vai para onde há ATIVIDADE:
-    # posição aberta na cidade ou sinal disparado nesta rodada. As demais são
-    # monitoradas em silêncio (sinais e stop loss continuam cobrindo todas).
+    # Decisão do Lucas: atualizações no Telegram SÓ quando (1) tem posição
+    # colocada na cidade, (2) alerta de entrada ou (3) alerta de stop. O
+    # bloco completo, portanto, só vai para cidades com POSIÇÃO aberta; as
+    # demais são monitoradas em silêncio (sinais e stop cobrem todas).
     pos_icaos = set()
     for p in positions:
         if p.get("redeemable"):
@@ -209,7 +210,6 @@ def main() -> int:
         pm = polymarket.parse_temp_market(p.get("title"))
         if pm:
             pos_icaos.add(pm["icao"])
-    signal_icaos = {v["icao"] for v in new_edges.values()}
 
     for station in stations:
         ctx = contexts.get(station.icao)
@@ -218,9 +218,8 @@ def main() -> int:
             print(f"[{station.icao}] sem novidade na projeção; bloco omitido.")
             continue
         if (config.FULL_BLOCK_ONLY_WITH_ACTIVITY
-                and station.icao not in pos_icaos
-                and station.icao not in signal_icaos):
-            continue  # cidade sem posição nem sinal: monitorada em silêncio
+                and station.icao not in pos_icaos):
+            continue  # sem posição na cidade: monitorada em silêncio
         try:
             _send_station_block(token, chat_id, station, ctx, positions,
                                 errors, yes_prob, position_success_prob)
