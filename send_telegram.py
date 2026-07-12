@@ -15,7 +15,8 @@ Estrutura do envio (foco exclusivo no D0 — o D+1 não aparece no digest):
   2. Sinais, uma mensagem POR CIDADE: faixas de HOJE em que a Probabilidade
      Real (modelo calibrado, a mesma da tabela) e o mercado divergem ≥
      EDGE_ALERT_MIN e o lado indicado tem mais de EDGE_MIN_CONFIDENCE de
-     chance (avisado uma vez por faixa).
+     chance (avisado uma vez por faixa). Só cruzamentos novos dentro da
+     janela local SIGNAL_HOURS; edge de madrugada é consumido em silêncio.
   3. Um bloco por estação: posições daquela cidade, tabela mercado × projetado
      de hoje e o gráfico (nowcast + distribuição de hoje) com o hora a hora.
 
@@ -159,7 +160,12 @@ def main() -> int:
     prev_probs = state.get("signal_probs", {})
     edges_now = {k: v for k, v in signal_rows.items() if _is_edge(v)}
     prev_edges = state.get("edges", {})
-    new_edges = {k: v for k, v in edges_now.items() if k not in prev_edges}
+    # Só cruzamentos NOVOS dentro da janela local (config.SIGNAL_HOURS) são
+    # enviados. Cruzamentos fora dela entram no estado mesmo assim — são
+    # consumidos em silêncio, não ficam represados esperando a janela abrir
+    # (o backtest mostrou que edge represado da madrugada não é executável).
+    new_edges = {k: v for k, v in edges_now.items()
+                 if k not in prev_edges and _in_signal_window(v["icao"])}
     for icao, text in _edges_messages(new_edges, prev_probs):
         try:
             notify.send_message(token, chat_id, text)
@@ -223,6 +229,12 @@ def _collect_signal_rows(stations, contexts, yes_prob) -> dict:
                          "day_label": f"hoje {day.strftime('%d/%m')}",
                          "yes": r["yes"], "mp": r["mp"]}
     return json.loads(json.dumps(rows))
+
+
+def _in_signal_window(icao: str) -> bool:
+    """Hora local da estação dentro da janela de envio de sinais."""
+    h = dt.datetime.now(config.STATIONS[icao].tz).hour
+    return config.SIGNAL_HOURS[0] <= h <= config.SIGNAL_HOURS[1]
 
 
 def _is_edge(row: dict) -> bool:

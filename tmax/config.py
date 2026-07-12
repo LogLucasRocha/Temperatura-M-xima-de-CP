@@ -116,6 +116,12 @@ EDGE_ALERT_MIN = 0.05
 # barato; 1 − P(Yes) se está caro).
 EDGE_MIN_CONFIDENCE = 0.90
 
+# Janela LOCAL em que sinais podem ser enviados. Fora dela (madrugada) o
+# mercado é fino demais para executar e o backtest mostrou que o edge é
+# ilusório: cruzamentos fora da janela são consumidos em silêncio — não
+# ficam represados esperando a janela abrir.
+SIGNAL_HOURS = (6, 23)
+
 # Inflação de incerteza para D+1 (erro cresce com o horizonte)
 D1_STD_INFLATION = 1.15
 

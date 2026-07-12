@@ -103,7 +103,9 @@ apostar 10% do capital em cada sinal. Linha a linha do relatório:
 
 - **"N dias-cidade · M apostas simuladas"** — dias de arquivo (dias × 3
   cidades) e quantos sinais a regra teria disparado (1 aposta por faixa/dia,
-  no primeiro cruzamento de edge ≥ 5 p.p. com confiança > 90%).
+  no primeiro cruzamento de edge ≥ 5 p.p. com confiança > 90%, dentro da
+  janela local `SIGNAL_HOURS` — cruzamentos da madrugada são descartados,
+  não represados).
 - **"Acerto: X%"** — fração das apostas que resolveram a favor.
 - **"modelo médio Y%"** — confiança média que o modelo DECLAROU no lado
   comprado. Compare com o acerto: se declara 99% e acerta 77%, o modelo é
