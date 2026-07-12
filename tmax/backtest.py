@@ -502,14 +502,18 @@ def confidence_report(min_conf: float | None = None,
     return out
 
 
-def simulate(log=lambda m: None) -> dict:
+def simulate(log=lambda m: None, hour_min: int = 0,
+             hour_max: int = 23) -> dict:
     """Roda a regra de sinais sobre o arquivo inteiro, com a Probabilidade
-    Real (modelo calibrado), igual à produção. Retorna estatísticas e as
-    apostas."""
+    Real (modelo calibrado), igual à produção. `hour_min`/`hour_max` limitam
+    a janela local em que sinais podem disparar (ex.: 6–23 exclui os mercados
+    finos da madrugada). Retorna estatísticas e as apostas."""
     rows, days_seen, res_mismatch = _collect_rows(log)
     signals = []
     done: set = set()
     for r in rows:
+        if not (hour_min <= r["hour"] <= hour_max):
+            continue
         key = (r["icao"], r["day"], r["bi"])
         if key in done:
             continue
