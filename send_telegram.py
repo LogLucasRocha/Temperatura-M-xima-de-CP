@@ -188,10 +188,11 @@ def main() -> int:
             print(f"[stop] ERRO: {exc}", file=sys.stderr)
 
     # 2c) Alertas de condição observada — platô de 2h e fuga do envelope do
-    # ensemble. Cada episódio avisa UMA vez (chave no estado; re-arma quando
-    # a condição muda) e puxa o bloco completo da cidade junto.
+    # ensemble. Computados aqui; a ENTREGA é junto do bloco da cidade (não
+    # separada). Cada episódio avisa uma vez (chave no estado; re-arma quando
+    # a condição muda).
     cond_state = state.get("cond_alerts", {})
-    alert_icaos = set()
+    cond_pending: dict[str, list] = {}
     for station in stations:
         ctx = contexts.get(station.icao)
         if ctx is None:
@@ -205,24 +206,14 @@ def main() -> int:
             key, texto = res
             if cond_state.get(skey) == key:
                 continue  # mesmo episódio já avisado
-            try:
-                notify.send_message(token, chat_id, texto)
-                cond_state[skey] = key
-                alert_icaos.add(station.icao)
-                print(f"[{station.icao}] alerta de condição ({kind}).")
-            except Exception as exc:  # noqa: BLE001 — alerta é acessório
-                print(f"[{station.icao}] ERRO no alerta {kind}: {exc}",
-                      file=sys.stderr)
+            cond_pending.setdefault(station.icao, []).append(
+                (skey, key, texto))
+    alert_icaos = set(cond_pending)
 
-    # 3) Sinais, uma mensagem por cidade. O sinal REPETE a cada rodada
-    # enquanto o gap existir — some só quando a divergência fecha, a máxima
-    # trava ou a hora local sai da janela de envio.
-    for icao, text in _edges_messages(new_edges, prev_probs):
-        try:
-            notify.send_message(token, chat_id, text)
-            print(f"[sinais] {icao}: sinal(is) enviado(s).")
-        except Exception as exc:  # noqa: BLE001 — sinal é acessório
-            print(f"[sinais] {icao}: ERRO ao enviar: {exc}", file=sys.stderr)
+    # 3) Sinais: as mensagens são entregues DENTRO do bloco da cidade quando
+    # há bloco nesta rodada; repetição de sinal em cidade sem bloco sai
+    # sozinha (sem re-enviar gráficos).
+    sig_msgs = dict(_edges_messages(new_edges, prev_probs))
 
     # 4) Um bloco por estação: divisor, posições da cidade, tabela mercado ×
     # projetado e, por fim, gráfico (nowcast) + hora a hora. Falha de uma
@@ -241,25 +232,38 @@ def main() -> int:
             pos_icaos.add(pm["icao"])
 
     for station in stations:
-        ctx = contexts.get(station.icao)
-        fp = fps[station.icao]
-        fresh_signal = (station.icao in fresh_icaos
-                        or station.icao in alert_icaos)
-        if station.icao not in novidade and not fresh_signal:
-            print(f"[{station.icao}] sem novidade na projeção; bloco omitido.")
+        icao = station.icao
+        ctx = contexts.get(icao)
+        fp = fps[icao]
+        fresh_signal = icao in fresh_icaos or icao in alert_icaos
+        has_block = not (
+            (icao not in novidade and not fresh_signal)
+            or (config.FULL_BLOCK_ONLY_WITH_ACTIVITY
+                and icao not in pos_icaos and not fresh_signal))
+        if not has_block:
+            # repetição de sinal em cidade sem bloco: só a mensagem do sinal
+            if icao in sig_msgs:
+                try:
+                    notify.send_message(token, chat_id, sig_msgs[icao])
+                    print(f"[sinais] {icao}: sinal (repetição) enviado.")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[sinais] {icao}: ERRO: {exc}", file=sys.stderr)
             continue
-        if (config.FULL_BLOCK_ONLY_WITH_ACTIVITY
-                and station.icao not in pos_icaos and not fresh_signal):
-            continue  # sem posição nem sinal novo: monitorada em silêncio
+        # sinal + alertas de condição entram no TOPO do bloco da cidade
+        pre = ([sig_msgs[icao]] if icao in sig_msgs else [])
+        pre += [texto for _sk, _k, texto in cond_pending.get(icao, [])]
         try:
             _send_station_block(token, chat_id, station, ctx, positions,
-                                errors, yes_prob, position_success_prob)
+                                errors, yes_prob, position_success_prob,
+                                pre_msgs=pre)
         except Exception as exc:  # noqa: BLE001 — falha de envio de uma estação não derruba as demais
-            errors[station.icao] = str(exc)
-            print(f"[{station.icao}] ERRO no bloco: {exc}", file=sys.stderr)
+            errors[icao] = str(exc)
+            print(f"[{icao}] ERRO no bloco: {exc}", file=sys.stderr)
         else:
             if fp is not None:
-                station_state[station.icao] = fp
+                station_state[icao] = fp
+            for skey, key, _texto in cond_pending.get(icao, []):
+                cond_state[skey] = key
     _save_digest_state({"stations": station_state, "edges": edges_now,
                         "signal_probs": signal_rows,
                         "cond_alerts": cond_state})
@@ -471,10 +475,14 @@ def _save_digest_state(state: dict) -> None:
 
 
 def _send_station_block(token, chat_id, station, ctx, positions,
-                        errors, yes_prob, position_success_prob) -> None:
-    """Envia o bloco completo de UMA estação (divisor, posições, tabela de
-    odds, gráfico e hora a hora). Levanta na primeira falha de envio."""
+                        errors, yes_prob, position_success_prob,
+                        pre_msgs=None) -> None:
+    """Envia o bloco completo de UMA estação (divisor, sinais/alertas da
+    rodada, posições, tabela de odds, gráfico e hora a hora). Levanta na
+    primeira falha de envio."""
     notify.send_message(token, chat_id, notify.station_divider(station))
+    for m in pre_msgs or []:
+        notify.send_message(token, chat_id, m)
 
     # 4a) posições abertas desta cidade, com a chance de dar certo
     if positions:
