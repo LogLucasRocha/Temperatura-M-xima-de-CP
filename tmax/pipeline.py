@@ -110,7 +110,8 @@ def build_context(station: Station = config.DEFAULT_STATION,
         d0, ens["time"], ens["members"], bias,
         now=now, shift=shift, obs_max=obs_max_today)
     dist_d0 = distribution.build_distribution(
-        mm_d0, bias, obs_floor=obs_max_today, std_scale=frac_remaining)
+        mm_d0, bias, obs_floor=obs_max_today, std_scale=frac_remaining,
+        obs_locked=tmax_locked)
 
     mm_d1 = distribution.member_maxima_for_day(
         d1, ens["time"], ens["members"], bias)

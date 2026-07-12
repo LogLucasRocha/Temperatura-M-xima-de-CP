@@ -96,10 +96,12 @@ def member_maxima_for_day(day: dt.date, ens_times: list[dt.datetime],
 
 def build_distribution(member_maxima: list[dict], bias: dict,
                        obs_floor: float | None = None,
-                       std_scale: float = 1.0) -> dict | None:
+                       std_scale: float = 1.0,
+                       obs_locked: bool = False) -> dict | None:
     """Mistura de gaussianas: cada membro vira N(tmax, resid_std da família).
     `obs_floor` trunca a distribuição (a máxima não pode ficar abaixo do já
-    observado). Retorna quantis e probabilidade por faixa de 1 °C."""
+    observado); `obs_locked` diz que o pico OBSERVADO já passou (critério das
+    3 horas do pipeline). Retorna quantis e probabilidade por faixa de 1 °C."""
     if not member_maxima:
         return None
 
@@ -110,9 +112,13 @@ def build_distribution(member_maxima: list[dict], bias: dict,
         # Máxima já travada: nenhuma hora restante do membro chega perto do
         # observado, então a "máxima do dia" virou fato medido, não previsão.
         # Sem encolher o sigma, o piso de 0.3 vaza cauda para a faixa acima
-        # (ex.: 5% em 26 °C com obs 25.0 e noite a 18 °C).
+        # (ex.: 5% em 26 °C com obs 25.0 e noite a 18 °C). O colapso exige
+        # `obs_locked` (pico observado já passou): sem isso ele dispararia de
+        # manhã só porque o ensemble PREVÊ tarde mais fria que o já observado
+        # — e o backtest mostrou que essa certeza prematura erra feio.
         fut = m.get("future_max")
-        if obs_floor is not None and (fut is None or fut + 2 * s < obs_floor):
+        if (obs_locked and obs_floor is not None
+                and (fut is None or fut + 2 * s < obs_floor)):
             s = 0.05
         comps.append((m["tmax"], s))
 
