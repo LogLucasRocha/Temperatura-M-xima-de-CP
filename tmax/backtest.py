@@ -37,7 +37,7 @@ from pathlib import Path
 
 import requests
 
-from . import config, distribution, polymarket
+from . import calibration, config, distribution, polymarket
 
 ARCHIVE = config.ROOT / "backtest_data"
 ENS_PAST_DAYS = 92        # alcance do arquivo de ensemble da Open-Meteo
@@ -306,10 +306,14 @@ def _bias_asof(bias_daily: dict, day: dt.date) -> dict:
     return out
 
 
-def simulate(log=lambda m: None) -> dict:
-    """Roda a regra de sinais sobre o arquivo inteiro. Retorna estatísticas e a
-    lista de apostas simuladas."""
-    signals = []
+def _collect_rows(log=lambda m: None) -> tuple[list, int, int]:
+    """Reconstrói, para cada hora pré-trava de cada dia arquivado e cada faixa
+    resolvida, a probabilidade CRUA do modelo e o último preço negociado.
+
+    Retorna (rows, dias_vistos, divergências_de_resolução). Cada row:
+    {icao, day, hour, ts, settle, bi, label, yes_won, mp, yes} — `yes` é None
+    quando não houve negócio recente (ainda serve para calibração)."""
+    rows = []
     res_mismatch = 0
     days_seen = 0
     for icao, station in config.STATIONS.items():
@@ -364,7 +368,6 @@ def simulate(log=lambda m: None) -> dict:
                 if met != b["yes_won"]:
                     res_mismatch += 1
 
-            done: set = set()
             for hour in range(0, 24):
                 t = dt.datetime.combine(day, dt.time(hour, 5), tzinfo=tz)
                 obs_today = [o for o in obs_all if o["time"] <= t]
@@ -393,38 +396,85 @@ def simulate(log=lambda m: None) -> dict:
                     continue
 
                 t_epoch = t.timestamp()
+                settle = dt.datetime.combine(
+                    day + dt.timedelta(days=1), dt.time(0, 30),
+                    tzinfo=tz).timestamp()
                 for b in bands:
-                    if b["bi"] in done:
+                    mp = distribution.market_prob(
+                        dist, b["threshold"], b["mode"])
+                    if mp is None:
                         continue
                     pts = [p for ts, p in b["hist"]
                            if ts <= t_epoch and ts >= t_epoch - PRICE_STALENESS_S]
-                    if not pts:
-                        continue
-                    yes = pts[-1]
-                    mp = distribution.market_prob(
-                        dist, b["threshold"], b["mode"])
-                    if mp is None or ((yes or 0) < 0.01 and mp < 0.01):
-                        continue
-                    diff = mp - yes
-                    if abs(diff) < config.EDGE_ALERT_MIN:
-                        continue
-                    side_prob = mp if diff > 0 else 1.0 - mp
-                    if side_prob <= config.EDGE_MIN_CONFIDENCE:
-                        continue
-                    side = "SIM" if diff > 0 else "NAO"
-                    price = yes if side == "SIM" else 1.0 - yes
-                    if price <= 0.005 or price >= 0.995:
-                        continue
-                    done.add(b["bi"])
-                    won = b["yes_won"] if side == "SIM" else not b["yes_won"]
-                    signals.append(dict(
+                    rows.append(dict(
                         icao=icao, day=day.isoformat(), hour=t.hour,
-                        label=b["label"], side=side, price=price,
-                        model=side_prob, won=won, bet_ts=t_epoch,
-                        settle=dt.datetime.combine(
-                            day + dt.timedelta(days=1), dt.time(0, 30),
-                            tzinfo=tz).timestamp()))
-    log(f"{days_seen} dias simulados, {len(signals)} sinais.")
+                        ts=t_epoch, settle=settle, bi=b["bi"],
+                        label=b["label"], yes_won=b["yes_won"], mp=mp,
+                        yes=pts[-1] if pts else None))
+    log(f"{days_seen} dias reconstruídos, {len(rows)} pares "
+        "probabilidade × desfecho.")
+    return rows, days_seen, res_mismatch
+
+
+def fit_calibration(log=lambda m: None) -> dict:
+    """Ajusta a calibração completa sobre o arquivo: isotônica por período do
+    dia (todas as faixas × horas) + blend logístico com o preço do mercado
+    (o backtest mostrou que o preço carrega informação que o modelo não vê).
+    Grava tmax/calibration.json e retorna o resumo com Brier antes/depois."""
+    rows, days, _ = _collect_rows(log)
+    pairs: dict[str, list] = defaultdict(list)
+    blend_rows = []
+    for r in rows:
+        y = 1 if r["yes_won"] else 0
+        pairs[calibration.bucket_for_hour(r["hour"])].append((r["mp"], y))
+        blend_rows.append((r["mp"], r["hour"], r["yes"], y))
+    summary = calibration.fit(pairs, blend_rows=blend_rows,
+                              meta={"days": days})
+    for name, s in sorted(summary.items()):
+        if name.startswith("blend"):
+            log(f"calibração {name}: n={s['n']} Brier {s['brier_cal']:.4f} -> "
+                f"{s['brier_post']:.4f} (a={s['a']} modelo, b={s['b']} preço)")
+        else:
+            log(f"calibração {name}: n={s['n']} Brier {s['brier_raw']:.4f} -> "
+                f"{s['brier_cal']:.4f} ({s['points']} pontos)")
+    return summary
+
+
+def simulate(log=lambda m: None) -> dict:
+    """Roda a regra de sinais sobre o arquivo inteiro, com o POSTERIOR
+    (modelo calibrado + preço do mercado), igual à produção. Retorna
+    estatísticas e as apostas."""
+    rows, days_seen, res_mismatch = _collect_rows(log)
+    signals = []
+    done: set = set()
+    for r in rows:
+        key = (r["icao"], r["day"], r["bi"])
+        if key in done:
+            continue
+        yes = r["yes"]
+        if yes is None:
+            continue
+        post = calibration.posterior(
+            calibration.apply(r["mp"], r["hour"]), yes, hour=r["hour"])
+        if (yes or 0) < 0.01 and post < 0.01:
+            continue
+        diff = post - yes
+        if abs(diff) < config.EDGE_ALERT_MIN:
+            continue
+        side_prob = post if diff > 0 else 1.0 - post
+        if side_prob <= config.EDGE_MIN_CONFIDENCE:
+            continue
+        side = "SIM" if diff > 0 else "NAO"
+        price = yes if side == "SIM" else 1.0 - yes
+        if price <= 0.005 or price >= 0.995:
+            continue
+        done.add(key)
+        won = r["yes_won"] if side == "SIM" else not r["yes_won"]
+        signals.append(dict(
+            icao=r["icao"], day=r["day"], hour=r["hour"], label=r["label"],
+            side=side, price=price, model=side_prob, won=won,
+            bet_ts=r["ts"], settle=r["settle"]))
+    log(f"{days_seen} dias simulados, {len(signals)} sinais (posterior).")
     return _stats(signals, res_mismatch, days_seen)
 
 

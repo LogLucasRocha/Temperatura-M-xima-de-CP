@@ -43,8 +43,19 @@ def main() -> int:
         added = backtest.harvest(log)
         log(f"harvest: {added} dia(s) novo(s) arquivado(s).")
 
+    # Reajusta a curva de calibração com o arquivo atualizado; a simulação
+    # (e a produção) usam a probabilidade calibrada.
+    cal = backtest.fit_calibration(log)
     stats = backtest.simulate(log)
     text = backtest.report_text(stats)
+    if cal:
+        partes = [f"{nome} {s['brier_raw']:.3f}→{s['brier_cal']:.3f}"
+                  for nome, s in sorted(cal.items()) if "brier_raw" in s]
+        partes += [f"{nome} {s['brier_cal']:.3f}→{s['brier_post']:.3f}"
+                   for nome, s in sorted(cal.items())
+                   if nome.startswith("blend")]
+        text += ("\n🎯 <b>Calibração reajustada</b> (Brier antes→depois): "
+                 + " · ".join(partes))
     print("\n" + text.replace("<b>", "").replace("</b>", "")
           .replace("&amp;", "&").replace("&gt;", ">"))
 

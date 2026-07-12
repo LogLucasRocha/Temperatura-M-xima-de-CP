@@ -46,7 +46,7 @@ import sys
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from tmax import config, distribution, notify, pipeline, polymarket
+from tmax import calibration, config, distribution, notify, pipeline, polymarket
 
 
 def main() -> int:
@@ -101,13 +101,20 @@ def main() -> int:
             return None
         dist = (ctx["dist_d0"] if end_date == ctx["d0"]
                 else ctx["dist_d1"] if end_date == ctx["d1"] else None)
-        return distribution.market_prob(dist, ev["threshold"], ev["mode"])
+        p = distribution.market_prob(dist, ev["threshold"], ev["mode"])
+        # Probabilidade CALIBRADA (curva empírica do backtest): D0 usa o
+        # período do dia local; D+1 usa o período menos informado, porque a
+        # projeção de amanhã sabe ainda menos que a madrugada de hoje.
+        hour = ctx["now"].hour if end_date == ctx["d0"] else None
+        return calibration.apply(p, hour)
 
     def position_success_prob(p: dict) -> float | None:
-        """P(a posição dar certo): P(Yes) se apostou Yes, senão 1−P(Yes)."""
+        """P(a posição dar certo): P(Yes) se apostou Yes, senão 1−P(Yes).
+        Usa o posterior (modelo calibrado + preço atual do mercado)."""
         p_yes = yes_prob(p.get("title"), p.get("endDate"))
         if p_yes is None:
             return None
+        p_yes = calibration.posterior(p_yes, float(p.get("curPrice") or 0))
         outcome = str(p.get("outcome") or "").strip().lower()
         if outcome == "yes":
             return p_yes
@@ -201,8 +208,10 @@ def _collect_signal_rows(stations, contexts, yes_prob) -> dict:
             continue
         if ctx["tmax_locked"]:
             day, day_label = ctx["d1"], "amanhã"
+            hour = None  # D+1: período menos informado na calibração
         else:
             day, day_label = ctx["d0"], "hoje"
+            hour = ctx["now"].hour
         slug = polymarket.event_slug(station.icao, day)
         if not slug:
             continue
@@ -217,18 +226,22 @@ def _collect_signal_rows(stations, contexts, yes_prob) -> dict:
             key = f"{station.icao}:{day.isoformat()}:{r['label']}"
             rows[key] = {"icao": station.icao, "label": r["label"],
                          "day_label": f"{day_label} {day.strftime('%d/%m')}",
-                         "yes": r["yes"], "mp": r["mp"]}
+                         "yes": r["yes"], "mp": r["mp"],
+                         # melhor estimativa: modelo calibrado + preço
+                         "post": calibration.posterior(r["mp"], r["yes"],
+                                                       hour=hour)}
     return json.loads(json.dumps(rows))
 
 
 def _is_edge(row: dict) -> bool:
     """Sinal acionável: divergência mínima E o lado indicado (comprar Yes se
     está barato, No se está caro) com mais de EDGE_MIN_CONFIDENCE de chance de
-    acertar segundo a projeção."""
-    diff = row["mp"] - row["yes"]
+    acertar segundo o POSTERIOR (modelo calibrado + preço do mercado)."""
+    post = row.get("post", row["mp"])
+    diff = post - row["yes"]
     if abs(diff) < config.EDGE_ALERT_MIN:
         return False
-    side_prob = row["mp"] if diff > 0 else 1.0 - row["mp"]
+    side_prob = post if diff > 0 else 1.0 - post
     return side_prob > config.EDGE_MIN_CONFIDENCE
 
 
@@ -238,15 +251,19 @@ def _edges_messages(edges: dict, prev_probs: dict) -> list[tuple[str, str]]:
     COMPRADO — mercado × modelo — e o modelo da rodada anterior."""
     by_icao: dict[str, list[str]] = {}
     for key, e in edges.items():
-        prev_mp = prev_probs.get(key, {}).get("mp")
-        if e["mp"] > e["yes"]:          # Yes subvalorizado pelo mercado
+        post = e.get("post", e["mp"])
+        prev = prev_probs.get(key, {})
+        prev_post = prev.get("post")
+        if prev_post is None and prev.get("mp") is not None:
+            prev_post = calibration.posterior(prev["mp"], prev.get("yes"))
+        if post > e["yes"]:              # Yes subvalorizado pelo mercado
             dot, acao = "🟢", "Comprar SIM"
-            mkt, mdl = e["yes"], e["mp"]
-            prev_side = prev_mp
+            mkt, mdl = e["yes"], post
+            prev_side = prev_post
         else:                            # Yes sobrevalorizado → comprar o Não
             dot, acao = "🔴", "Comprar NÃO"
-            mkt, mdl = 1.0 - e["yes"], 1.0 - e["mp"]
-            prev_side = None if prev_mp is None else 1.0 - prev_mp
+            mkt, mdl = 1.0 - e["yes"], 1.0 - post
+            prev_side = None if prev_post is None else 1.0 - prev_post
         antes = ("antes —" if prev_side is None
                  else f"antes {prev_side * 100:.0f}%")
         by_icao.setdefault(e["icao"], []).append(
