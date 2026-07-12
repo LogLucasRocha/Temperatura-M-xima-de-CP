@@ -95,6 +95,44 @@ reports/               relatórios gerados
 - `NOWCAST_DAMPING` (0.7) — quanto do desvio observado propagar para a tarde
 - `D1_STD_INFLATION` (1.15) — inflação de incerteza para amanhã
 
+## Como ler o relatório do backtest (Telegram, a cada 3 dias)
+
+O workflow `backtest.yml` reconstrói a projeção hora a hora de cada dia
+arquivado (`backtest_data/`), aplica a regra de sinais de produção e simula
+apostar 10% do capital em cada sinal. Linha a linha do relatório:
+
+- **"N dias-cidade · M apostas simuladas"** — dias de arquivo (dias × 3
+  cidades) e quantos sinais a regra teria disparado (1 aposta por faixa/dia,
+  no primeiro cruzamento de edge ≥ 5 p.p. com confiança > 90%).
+- **"Acerto: X%"** — fração das apostas que resolveram a favor.
+- **"modelo médio Y%"** — confiança média que o modelo DECLAROU no lado
+  comprado. Compare com o acerto: se declara 99% e acerta 77%, o modelo é
+  superconfiante; se os dois batem, está calibrado.
+- **"preço médio 0.NN"** — quanto custou, em média, cada $1 de retorno
+  potencial (0.74 = pagou 74 centavos por algo que paga $1 se acertar).
+- **"P&L flat: +X.XXx"** — lucro somado apostando SEMPRE 10% do capital
+  INICIAL (sem reinvestir). Métrica estável para comparar regras entre si.
+- **"composto: X.XXx"** — o "quanto eu teria": reinvestindo (10% do capital
+  corrente em cada aposta), o capital final em múltiplos do inicial.
+- **"drawdown máx X%"** — a pior queda do pico ao vale da curva composta.
+  É o quanto você precisaria aguentar ver sumir sem abandonar a regra.
+- **"N faixas com resolução divergente"** — mercados que resolveram
+  diferente do METAR arredondado (risco da fonte de resolução oficial).
+- **"Por cidade / Por lado"** — nº de apostas (acerto, P&L flat de cada
+  grupo). Lado NÃO = comprar o Não; SIM = comprar o Yes.
+- **"📏 Confiança ≥ 90% no D0"** — de todas as faixas em que o modelo
+  declarou ≥ 90% (mesmo sem sinal), quantas ele acertou, por cidade —
+  o termômetro de calibração mais direto ("declarado" vs real).
+- **"🎯 Calibração (Brier antes→depois)"** — erro quadrático médio das
+  probabilidades (menor = melhor) antes e depois da curva de calibração,
+  por período do dia; "blend" é o diagnóstico modelo+preço (quanto menor o
+  peso `a` do modelo, menos ele adiciona ao que o preço já diz).
+
+Ressalvas permanentes: a reconstrução usa o último preço negociado (mercados
+finos de madrugada não executariam em tamanho); a calibração é reajustada
+in-sample a cada rodada; e o arquivo cresce ~3 dias por execução, então os
+números mudam conforme a história acumula.
+
 ## Limitações conhecidas / próximos passos
 
 - O viés é uma média simples; separar por estação do ano, condição de céu e
