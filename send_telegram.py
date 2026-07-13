@@ -9,7 +9,8 @@ Na nuvem roda pelo GitHub Actions (.github/workflows/main.yml), com o
 token e o chat_id guardados como *secrets* do repositório.
 
 Modo silencioso (decisão do Lucas, 12/07) — o Telegram só recebe:
-  1. Resumo geral das posições (PnL) quando alguma estação tem novidade.
+  1. Resumo geral das posições (PnL): no máximo UMA vez por hora, quando
+     alguma estação tem novidade.
   2. Alertas de compra: sinais de edge (só NÃO, preço ≥ NAO_MIN_PRICE,
      repetindo enquanto o gap durar, janela SIGNAL_HOURS) e colheita de
      favoritos (HARVEST_*, uma vez por faixa/dia). Um alerta NOVO chega com
@@ -45,6 +46,7 @@ import html
 import json
 import os
 import sys
+import time
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -166,12 +168,16 @@ def main() -> int:
             positions = polymarket.fetch_positions(wallet)
         except Exception as exc:  # noqa: BLE001 — leitura da carteira é acessório
             print(f"[polymarket] ERRO ao ler posições: {exc}", file=sys.stderr)
-        if positions and novidade:
+        # Evolução do portfólio: no máximo 1x por hora (decisão do Lucas).
+        pnl_sent_at = float(state.get("pnl_sent_at") or 0)
+        if (positions and novidade
+                and time.time() - pnl_sent_at >= 3600):
             try:
                 notify.send_message(
                     token, chat_id,
                     polymarket.positions_message(positions,
                                                  position_success_prob))
+                state["pnl_sent_at"] = time.time()
                 print("[polymarket] posições enviadas.")
             except Exception as exc:  # noqa: BLE001
                 print(f"[polymarket] ERRO no resumo: {exc}", file=sys.stderr)
@@ -294,7 +300,8 @@ def main() -> int:
     _save_digest_state({"stations": station_state, "edges": edges_now,
                         "signal_probs": signal_rows,
                         "cond_alerts": cond_state,
-                        "harvest": harvest_keep})
+                        "harvest": harvest_keep,
+                        "pnl_sent_at": state.get("pnl_sent_at", 0)})
 
     return 1 if len(errors) == len(stations) else 0
 
