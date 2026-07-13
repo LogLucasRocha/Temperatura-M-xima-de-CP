@@ -5,6 +5,10 @@ on:
     - cron: "*/10 * * * *"
   workflow_dispatch:        
 
+permissions:
+  contents: read
+  actions: write   # watchdog: disparar o backtest se o agendado for pulado
+
 concurrency:
   group: telegram-tmax
   cancel-in-progress: false
@@ -44,6 +48,34 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           POLYMARKET_WALLET: ${{ vars.POLYMARKET_WALLET }}
         run: python send_telegram.py
+
+      # O agendador do GitHub pula/atrasa crons com frequência (aconteceu em
+      # 13/07: o backtest das 09:00 UTC simplesmente não disparou). Este
+      # watchdog roda a cada rodada do digest: nos dias de backtest (1, 4,
+      # 7, ... — passo 3 a partir do dia 1), depois das 09:00 UTC, se não
+      # houver execução bem-sucedida nem em andamento hoje, dispara o
+      # workflow via API — e repete a cada rodada até um sucesso.
+      - name: Watchdog do backtest
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          dia=$(date -u +%-d); hora=$(date -u +%-H); hoje=$(date -u +%F)
+          if [ $(( (dia - 1) % 3 )) -ne 0 ] || [ "$hora" -lt 9 ]; then
+            echo "hoje não é dia de backtest (ou ainda é cedo)"; exit 0
+          fi
+          runs=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/actions/workflows/backtest.yml/runs?created=$hoje..$hoje&per_page=20")
+          ok=$(echo "$runs" | python3 -c "import json,sys; d=json.load(sys.stdin); print('sim' if any(r['status'] in ('queued','in_progress') or r.get('conclusion')=='success' for r in d.get('workflow_runs',[])) else 'nao')")
+          if [ "$ok" = "nao" ]; then
+            curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/actions/workflows/backtest.yml/dispatches" \
+              -d '{"ref":"main"}'
+            echo "backtest de hoje não rodou — disparado pelo watchdog"
+          else
+            echo "backtest de hoje já rodou (ou está rodando)"
+          fi
 
       - name: Avisar falha no Telegram
         if: failure()
