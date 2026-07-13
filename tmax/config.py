@@ -190,7 +190,8 @@ STOP_EXIT_FRAC = 0.15
 # Colheita de favoritos (estratégia complementar, escolha do Lucas 12/07):
 # comprar o NÃO quando o mercado já está quase certo, dentro desta faixa de
 # preço, a partir desta hora local, com concordância mínima do modelo
-# calibrado. Alerta UMA vez por faixa/dia (o preço fica lá por horas).
+# calibrado. REPETE a cada rodada enquanto a oportunidade existir (pedido
+# do Lucas: continuar disparando até ele entrar ou a condição sumir).
 # Variante 16h — a mais segura do backtest (85d/18 cidades): 150 apostas,
 # 100% de acerto, 1.14x composto, dd 1.5%, 2 stops, zero perdas cheias.
 # (Mais volume: 12h → 595 apostas, 99.3%, 1.52x, dd 6.2%.)
