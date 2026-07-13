@@ -13,15 +13,21 @@ Modo silencioso (decisão do Lucas, 12/07) — o Telegram só recebe:
      alguma estação tem novidade.
   2. Alertas de compra: sinais de edge (só NÃO, preço ≥ NAO_MIN_PRICE) e
      colheita de favoritos (HARVEST_*) — ambos REPETEM a cada rodada
-     enquanto a oportunidade existir. Um alerta NOVO chega com o bloco
-     completo da cidade (tabela, gráfico, hora a hora — o contexto da
-     decisão de entrada); repetições vêm sozinhas. É o ÚNICO caso em que
-     blocos/gráficos são enviados.
-  3. Para cidades com posição aberta: SEM bloco (gera ansiedade) — apenas
-     avisos pontuais em texto de platô (2h de lado) e fuga do envelope do
-     ensemble, uma vez por episódio.
+     enquanto a oportunidade existir. Cada alerta vai ENXUTO (só o texto) com
+     um botão inline "📄 Ver relatório completo"; o bloco pesado (tabela,
+     gráfico, hora a hora) NÃO é mais enviado automaticamente — só sob demanda
+     (decisão do Lucas, 13/07, para não poluir o chat).
+  3. Para cidades com posição aberta: apenas avisos pontuais em texto de platô
+     (2h de lado) e fuga do envelope do ensemble, uma vez por episódio (com o
+     mesmo botão do relatório).
   4. Stop loss: claro e urgente, texto puro, toda rodada enquanto o mercado
      estiver ≥ STOP_ALERT_FRAC abaixo da entrada.
+
+Comandos (getUpdates, processados a cada rodada — latência de até ~10 min):
+  • /relatorio <cidade>  → bloco completo de qualquer cidade (ICAO ou nome)
+  • /cidades             → lista as cidades monitoradas
+  • /ajuda               → como usar o bot
+O botão dos alertas dispara o mesmo relatório completo da cidade.
 
 Tudo D0 (o D+1 não aparece); com a máxima travada (TMAX_LOCK_HOURS), sinais
 e tabela somem e o hora a hora corta as horas restantes. Estações sem
@@ -47,6 +53,7 @@ import json
 import os
 import sys
 import time
+import unicodedata
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -146,17 +153,14 @@ def main() -> int:
                 if fps[s.icao] is None
                 or station_state.get(s.icao) != fps[s.icao]}
 
-    # Sinais são computados cedo porque também decidem o que mais é enviado:
-    # um sinal NOVO (não estava na rodada anterior) puxa junto o resumo de
-    # posições e o bloco completo da cidade; as repetições vêm sozinhas.
+    # Sinais são computados cedo porque um sinal novo também puxa o resumo de
+    # posições (contexto para decidir a entrada). O alerta em si vai enxuto,
+    # com botão; o bloco completo só sai sob demanda (botão/comando).
     signal_rows = _collect_signal_rows(stations, contexts, yes_prob)
     prev_probs = state.get("signal_probs", {})
     edges_now = {k: v for k, v in signal_rows.items() if _is_edge(v)}
     new_edges = {k: v for k, v in edges_now.items()
                  if _in_signal_window(v["icao"])}
-    prev_edges = state.get("edges", {})
-    fresh_icaos = {v["icao"] for k, v in new_edges.items()
-                   if k not in prev_edges}
 
     # 2) Posições: buscadas TODA rodada (o stop loss precisa do preço atual);
     # o resumo geral é enviado quando há novidade no observado OU quando um
@@ -222,7 +226,9 @@ def main() -> int:
             if cond_state.get(skey) == key:
                 continue  # mesmo episódio já avisado
             try:
-                notify.send_message(token, chat_id, texto)
+                notify.send_message(token, chat_id, texto,
+                                    reply_markup=notify.report_keyboard(
+                                        station.icao))
                 cond_state[skey] = key
                 print(f"[{station.icao}] alerta de condição ({kind}).")
             except Exception as exc:  # noqa: BLE001 — alerta é acessório
@@ -231,12 +237,8 @@ def main() -> int:
 
     # 2d) Colheita de favoritos: NÃO quase-certo (preço na faixa
     # HARVEST_PRICE_*), após a hora local mínima, com o modelo concordando.
-    # REPETE a cada rodada enquanto a oportunidade existir (igual ao edge);
-    # a PRIMEIRA aparição vem com o bloco da cidade, repetições vêm sozinhas.
-    harvest_seen = set(state.get("harvest", []))
+    # REPETE a cada rodada enquanto a oportunidade existir (igual ao edge).
     harvest_pending: dict[str, list] = {}   # todas as vigentes nesta rodada
-    harvest_fresh: set = set()              # cidades com oportunidade NOVA
-    harvest_keep = []
     for k, v in signal_rows.items():
         if v["yes"] is None or v["mp"] is None:
             continue
@@ -255,66 +257,48 @@ def main() -> int:
                  f"<b>{html.escape(v['label'])}</b> @ ${price:.3f} "
                  f"(modelo {conc:.0%}, {h:02d}h local, stop −15%)")
         harvest_pending.setdefault(v["icao"], []).append((k, linha))
-        if k not in harvest_seen:
-            harvest_fresh.add(v["icao"])
 
-    # 3) Sinais: as mensagens são entregues DENTRO do bloco da cidade quando
-    # há bloco nesta rodada; repetição de sinal em cidade sem bloco sai
-    # sozinha (sem re-enviar gráficos).
+    # 3) Alertas de compra (edge + colheita): um por cidade, ENXUTO e com o
+    # botão "📄 Ver relatório completo". O bloco pesado (tabela + gráfico +
+    # hora a hora) NÃO vai mais automaticamente — só sob demanda (botão ou
+    # /relatorio). Os alertas REPETEM a cada rodada enquanto valerem.
     sig_msgs = dict(_edges_messages(new_edges, prev_probs))
-
-    # 4) Um bloco por estação: divisor, posições da cidade, tabela mercado ×
-    # projetado e, por fim, gráfico (nowcast) + hora a hora. Falha de uma
-    # parte/estação não derruba o resto. Estação sem novidade (mesma assinatura
-    # do último envio bem-sucedido) é omitida.
-    # Bloco completo (tabela + gráfico + hora a hora) SOMENTE para cidades
-    # com ALERTA DE COMPRA novo (sinal de edge ou colheita) — o bloco é o
-    # contexto da decisão de entrada. Posições existentes NÃO recebem bloco
-    # (gera ansiedade): ficam com o PnL geral, os avisos de condição em
-    # texto e o stop loss. Repetições de sinal continuam sozinhas.
     for station in stations:
         icao = station.icao
-        ctx = contexts.get(icao)
-        fp = fps[icao]
-        has_block = icao in fresh_icaos or icao in harvest_fresh
-        if not has_block:
-            # repetições (sinal e colheita) em cidade sem bloco: só o alerta
-            partes = []
-            if icao in sig_msgs:
-                partes.append(sig_msgs[icao])
-            linhas_hv = [linha for _k, linha
-                         in harvest_pending.get(icao, [])]
-            if linhas_hv:
-                partes.append("\n".join(linhas_hv))
-            for texto in partes:
-                try:
-                    notify.send_message(token, chat_id, texto)
-                    print(f"[alertas] {icao}: repetição enviada.")
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[alertas] {icao}: ERRO: {exc}", file=sys.stderr)
-            if linhas_hv:
-                harvest_keep += [k for k, _l
-                                 in harvest_pending.get(icao, [])]
+        partes = []
+        if icao in sig_msgs:
+            partes.append(sig_msgs[icao])
+        linhas_hv = [linha for _k, linha in harvest_pending.get(icao, [])]
+        if linhas_hv:
+            partes.append("\n".join(linhas_hv))
+        if not partes:
             continue
-        # sinal + colheita no TOPO do bloco da cidade
-        pre = ([sig_msgs[icao]] if icao in sig_msgs else [])
-        pre += [linha for _k, linha in harvest_pending.get(icao, [])]
         try:
-            _send_station_block(token, chat_id, station, ctx, positions,
-                                errors, yes_prob, position_success_prob,
-                                pre_msgs=pre)
-        except Exception as exc:  # noqa: BLE001 — falha de envio de uma estação não derruba as demais
-            errors[icao] = str(exc)
-            print(f"[{icao}] ERRO no bloco: {exc}", file=sys.stderr)
-        else:
-            if fp is not None:
-                station_state[icao] = fp
-            harvest_keep += [k for k, _l in harvest_pending.get(icao, [])]
-    _save_digest_state({"stations": station_state, "edges": edges_now,
+            notify.send_message(token, chat_id, "\n\n".join(partes),
+                                reply_markup=notify.report_keyboard(icao))
+            if fps[icao] is not None:
+                station_state[icao] = fps[icao]
+            print(f"[alertas] {icao}: alerta enviado (com botão).")
+        except Exception as exc:  # noqa: BLE001 — falha de uma cidade não derruba as demais
+            print(f"[alertas] {icao}: ERRO: {exc}", file=sys.stderr)
+
+    # 4) Comandos e cliques de botão recebidos desde a última rodada
+    # (getUpdates). É aqui que o relatório completo sai, sob demanda —
+    # com latência de até uma rodada (~10 min). Nunca derruba o digest.
+    tg_offset = state.get("tg_offset")
+    try:
+        tg_offset = _process_updates(
+            token, chat_id, tg_offset, state, stations, contexts,
+            positions, errors, yes_prob, position_success_prob)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[comandos] ERRO ao processar updates: {exc}", file=sys.stderr)
+
+    _save_digest_state({"stations": station_state,
                         "signal_probs": signal_rows,
                         "cond_alerts": cond_state,
-                        "harvest": harvest_keep,
-                        "pnl_sent_at": state.get("pnl_sent_at", 0)})
+                        "pnl_sent_at": state.get("pnl_sent_at", 0),
+                        "commands_set": state.get("commands_set", False),
+                        "tg_offset": tg_offset})
 
     return 1 if len(errors) == len(stations) else 0
 
@@ -523,6 +507,167 @@ def _save_digest_state(state: dict) -> None:
         config.DIGEST_STATE_FILE.write_text(json.dumps(state), "utf-8")
     except OSError as exc:
         print(f"AVISO: não salvou o estado do digest ({exc})", file=sys.stderr)
+
+
+# --------------------------------------------------- comandos (recebimento)
+
+_BOT_COMMANDS = [
+    {"command": "relatorio", "description": "Relatório completo de uma cidade"},
+    {"command": "cidades", "description": "Lista as cidades monitoradas"},
+    {"command": "ajuda", "description": "Como usar o bot"},
+]
+
+
+def _norm(s: str) -> str:
+    """Minúsculas sem acento, para casar nomes de cidade digitados livremente."""
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return s.strip().lower()
+
+
+def _resolve_station(arg: str) -> str | None:
+    """ICAO exato (SBGR) ou nome de cidade (Guarulhos), sem depender de acento
+    ou caixa. None se nada casar de forma inequívoca."""
+    up = arg.strip().upper()
+    if up in config.STATIONS:
+        return up
+    n = _norm(arg)
+    if not n:
+        return None
+    exato = [i for i, s in config.STATIONS.items() if _norm(s.city) == n]
+    if exato:
+        return exato[0]
+    parc = [i for i, s in config.STATIONS.items()
+            if _norm(s.city).startswith(n) or n in _norm(s.city)]
+    return parc[0] if len(parc) == 1 else None
+
+
+def _help_text() -> str:
+    return (
+        "🤖 <b>Bot de Tmax</b>\n\n"
+        "Você recebe só os <b>alertas</b> (sinais de compra, colheita, stop e "
+        "avisos de condição). Cada alerta traz o botão "
+        "<b>“📄 Ver relatório completo”</b> — toque nele quando quiser o "
+        "detalhe da cidade (tabela mercado × modelo, gráfico e hora a hora).\n\n"
+        "<b>Comandos</b>\n"
+        "• <code>/relatorio &lt;cidade&gt;</code> — relatório completo de "
+        "qualquer cidade. Ex.: <code>/relatorio Guarulhos</code> ou "
+        "<code>/relatorio SBGR</code>\n"
+        "• <code>/cidades</code> — lista as cidades monitoradas\n"
+        "• <code>/ajuda</code> — esta mensagem\n\n"
+        "<i>As respostas podem levar até uma rodada (~10 min): o bot processa "
+        "os comandos junto do envio agendado.</i>")
+
+
+def _cities_text() -> str:
+    linhas = [f"{s.flag} {html.escape(s.city)} — <code>{i}</code>"
+              for i, s in sorted(config.STATIONS.items(),
+                                 key=lambda kv: kv[1].city)]
+    return "🌎 <b>Cidades monitoradas</b>\n" + "\n".join(linhas)
+
+
+def _process_updates(token, chat_id, offset, state, stations, contexts,
+                     positions, errors, yes_prob, position_success_prob):
+    """Lê os updates pendentes do Telegram (comandos e cliques de botão),
+    responde e devolve o novo offset. Só atende o chat configurado."""
+    if not state.get("commands_set"):
+        try:
+            notify.set_my_commands(token, _BOT_COMMANDS)
+            state["commands_set"] = True
+        except Exception as exc:  # noqa: BLE001 — só afeta o menu "/"
+            print(f"[comandos] ERRO ao registrar comandos: {exc}",
+                  file=sys.stderr)
+
+    for u in notify.get_updates(token, offset):
+        offset = u["update_id"] + 1
+        try:
+            if "callback_query" in u:
+                _handle_callback(token, chat_id, u["callback_query"], stations,
+                                 contexts, positions, errors, yes_prob,
+                                 position_success_prob)
+            elif "message" in u:
+                _handle_message(token, chat_id, u["message"], stations,
+                                contexts, positions, errors, yes_prob,
+                                position_success_prob)
+        except Exception as exc:  # noqa: BLE001 — um update ruim não trava o resto
+            print(f"[comandos] ERRO no update {u.get('update_id')}: {exc}",
+                  file=sys.stderr)
+    return offset
+
+
+def _handle_message(token, chat_id, msg, stations, contexts, positions,
+                    errors, yes_prob, position_success_prob) -> None:
+    if str(msg.get("chat", {}).get("id")) != str(chat_id):
+        return  # ignora quem não é o dono do chat
+    text = (msg.get("text") or "").strip()
+    if not text.startswith("/"):
+        return
+    parts = text.split()
+    cmd = parts[0][1:].split("@")[0].lower()   # tira "/" e um eventual @bot
+    arg = " ".join(parts[1:]).strip()
+
+    if cmd in ("start", "help", "ajuda"):
+        notify.send_message(token, chat_id, _help_text())
+    elif cmd in ("cidades", "estacoes", "cities"):
+        notify.send_message(token, chat_id, _cities_text())
+    elif cmd in ("relatorio", "rel", "report", "cidade"):
+        if not arg:
+            notify.send_message(
+                token, chat_id,
+                "Uso: <code>/relatorio &lt;cidade&gt;</code>\n"
+                "Ex.: <code>/relatorio Guarulhos</code> ou "
+                "<code>/relatorio SBGR</code>\n\n" + _cities_text())
+            return
+        icao = _resolve_station(arg)
+        if not icao:
+            notify.send_message(
+                token, chat_id,
+                f"❓ Não encontrei “{html.escape(arg)}”.\n\n" + _cities_text())
+            return
+        _send_report_ondemand(token, chat_id, icao, contexts, positions,
+                              errors, yes_prob, position_success_prob)
+    else:
+        notify.send_message(token, chat_id,
+                            "Comando não reconhecido.\n\n" + _help_text())
+
+
+def _handle_callback(token, chat_id, cq, stations, contexts, positions,
+                     errors, yes_prob, position_success_prob) -> None:
+    data = cq.get("data") or ""
+    cq_chat = str(((cq.get("message") or {}).get("chat") or {}).get("id"))
+    if cq_chat != str(chat_id):
+        notify.answer_callback_query(token, cq["id"])
+        return
+    if data.startswith("rel:"):
+        icao = data[4:].strip().upper()
+        st = config.STATIONS.get(icao)
+        notify.answer_callback_query(
+            token, cq["id"],
+            f"Gerando relatório de {st.city if st else icao}…")
+        _send_report_ondemand(token, chat_id, icao, contexts, positions,
+                              errors, yes_prob, position_success_prob)
+    else:
+        notify.answer_callback_query(token, cq["id"])
+
+
+def _send_report_ondemand(token, chat_id, icao, contexts, positions, errors,
+                          yes_prob, position_success_prob) -> None:
+    """Envia o bloco completo de UMA cidade sob demanda (botão/comando)."""
+    station = config.STATIONS.get(icao)
+    if station is None:
+        notify.send_message(token, chat_id,
+                            f"❓ Estação desconhecida: {html.escape(icao)}.")
+        return
+    try:
+        _send_station_block(token, chat_id, station, contexts.get(icao),
+                            positions, errors, yes_prob, position_success_prob)
+        print(f"[comandos] relatório de {icao} enviado sob demanda.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[comandos] ERRO ao enviar relatório de {icao}: {exc}",
+              file=sys.stderr)
+        notify.send_message(
+            token, chat_id,
+            f"⚠️ Falha ao gerar o relatório de {html.escape(station.city)}.")
 
 
 def _send_station_block(token, chat_id, station, ctx, positions,

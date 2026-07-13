@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import io
+import json
 import time
 
 import matplotlib
@@ -333,11 +334,12 @@ def _tg_post(token: str, method: str, data: dict, files=None,
         time.sleep(wait)
 
 
-def send_message(token: str, chat_id: str, text: str) -> None:
-    _tg_post(token, "sendMessage",
-             {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-              "disable_web_page_preview": "true"},
-             timeout=30)
+def send_message(token: str, chat_id: str, text: str, reply_markup=None) -> None:
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+            "disable_web_page_preview": "true"}
+    if reply_markup is not None:
+        data["reply_markup"] = json.dumps(reply_markup)
+    _tg_post(token, "sendMessage", data, timeout=30)
 
 
 def send_photo(token: str, chat_id: str, png: bytes, caption: str) -> None:
@@ -345,3 +347,42 @@ def send_photo(token: str, chat_id: str, png: bytes, caption: str) -> None:
              {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
              files={"photo": ("previsao.png", png, "image/png")},
              timeout=90)
+
+
+# --------------------------------------------------- comandos (recebimento)
+
+def report_keyboard(icao: str) -> dict:
+    """Teclado inline com o botão que pede o relatório completo da cidade.
+    O callback_data (`rel:<ICAO>`) é lido no próximo getUpdates."""
+    return {"inline_keyboard": [[
+        {"text": "📄 Ver relatório completo", "callback_data": f"rel:{icao}"}
+    ]]}
+
+
+def get_updates(token: str, offset=None) -> list:
+    """Updates pendentes (mensagens e cliques de botão). Sem long polling
+    (timeout=0): drena o que chegou desde a última rodada e volta na hora.
+    `offset` confirma os já processados (update_id + 1)."""
+    params = {"timeout": 0,
+              "allowed_updates": json.dumps(["message", "callback_query"])}
+    if offset is not None:
+        params["offset"] = offset
+    r = requests.get(f"{TELEGRAM_API}/bot{token}/getUpdates",
+                     params=params, timeout=30)
+    r.raise_for_status()
+    return r.json().get("result", [])
+
+
+def answer_callback_query(token: str, callback_id: str, text=None) -> None:
+    """Confirma o clique (para o botão parar de "rodando"); `text` aparece
+    como um toast rápido no topo do Telegram."""
+    data = {"callback_query_id": callback_id}
+    if text:
+        data["text"] = text
+    _tg_post(token, "answerCallbackQuery", data, timeout=15)
+
+
+def set_my_commands(token: str, commands: list) -> None:
+    """Registra os comandos que aparecem no menu "/" do Telegram."""
+    _tg_post(token, "setMyCommands", {"commands": json.dumps(commands)},
+             timeout=15)

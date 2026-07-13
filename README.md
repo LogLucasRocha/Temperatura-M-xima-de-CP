@@ -89,6 +89,29 @@ data/                  caches gerados em runtime (viés, estado do digest)
 reports/               relatórios gerados
 ```
 
+## Bot do Telegram (comandos)
+
+O `send_telegram.py` roda a cada 10 min no GitHub Actions (`main.yml`) e, além
+de mandar os alertas, agora **lê os comandos e cliques de botão** (getUpdates)
+na mesma rodada — então a resposta chega com latência de **até ~10 min** (não
+há servidor sempre ligado; foi a opção escolhida para não exigir infra nova).
+
+Modo enxuto: o chat recebe só os **alertas** (sinais de compra, colheita, stop,
+avisos de condição). Cada alerta traz o botão **“📄 Ver relatório completo”**;
+o bloco pesado (tabela mercado × modelo, gráfico, hora a hora) **só é enviado
+sob demanda**, para não poluir o chat.
+
+Comandos (também no menu “/” do Telegram):
+
+- `/relatorio <cidade>` — relatório completo de qualquer cidade, por ICAO
+  (`/relatorio SBGR`) ou nome (`/relatorio Guarulhos`, sem depender de acento
+  ou maiúscula). Aliases: `/rel`, `/report`, `/cidade`.
+- `/cidades` — lista as cidades monitoradas com seus ICAOs.
+- `/ajuda` — como usar o bot (`/start`, `/help` também servem).
+
+O bot só responde ao chat configurado em `TELEGRAM_CHAT_ID` (ignora qualquer
+outro). O offset dos updates é guardado em `data/digest_state.json`.
+
 ## Parâmetros para calibrar (em `tmax/config.py`)
 
 - `BIAS_LOOKBACK_DAYS` (60) — janela de aprendizado do viés
