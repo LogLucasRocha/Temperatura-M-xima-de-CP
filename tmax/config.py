@@ -191,11 +191,12 @@ STOP_EXIT_FRAC = 0.15
 # comprar o NÃO quando o mercado já está quase certo, dentro desta faixa de
 # preço, a partir desta hora local, com concordância mínima do modelo
 # calibrado. Alerta UMA vez por faixa/dia (o preço fica lá por horas).
-# Backtest 85d/18 cidades: 595 apostas, 99.3%, 1.52x composto, dd 6.2%,
-# 16 stops, zero perdas cheias. (Alternativa mais eficiente: 0.95/14h.)
+# Variante 16h — a mais segura do backtest (85d/18 cidades): 150 apostas,
+# 100% de acerto, 1.14x composto, dd 1.5%, 2 stops, zero perdas cheias.
+# (Mais volume: 12h → 595 apostas, 99.3%, 1.52x, dd 6.2%.)
 HARVEST_PRICE_MIN = 0.97
 HARVEST_PRICE_MAX = 0.995
-HARVEST_MIN_HOUR = 12
+HARVEST_MIN_HOUR = 16
 HARVEST_MIN_CONF = 0.85
 
 # Com 25 cidades, o bloco completo (posições+tabela+gráfico+hora a hora) só
