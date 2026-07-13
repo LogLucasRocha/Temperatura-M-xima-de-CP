@@ -421,12 +421,14 @@ def _collect_rows(log=lambda m: None) -> tuple[list, int, int]:
     return rows, days_seen, res_mismatch
 
 
-def fit_calibration(log=lambda m: None) -> dict:
+def fit_calibration(log=lambda m: None, data=None) -> dict:
     """Ajusta a calibração completa sobre o arquivo: isotônica por período do
     dia (todas as faixas × horas) + blend logístico com o preço do mercado
     (o backtest mostrou que o preço carrega informação que o modelo não vê).
-    Grava tmax/calibration.json e retorna o resumo com Brier antes/depois."""
-    rows, days, _ = _collect_rows(log)
+    Grava tmax/calibration.json e retorna o resumo com Brier antes/depois.
+    `data` opcional: resultado de _collect_rows já pronto (evita repetir a
+    reconstrução quando várias análises rodam em sequência)."""
+    rows, days, _ = data if data is not None else _collect_rows(log)
     pairs: dict[str, list] = defaultdict(list)
     blend_rows = []
     for r in rows:
@@ -475,7 +477,7 @@ def check_resolution_sources(log=lambda m: None) -> list[str]:
 
 
 def confidence_report(min_conf: float | None = None,
-                      log=lambda m: None) -> dict:
+                      log=lambda m: None, data=None) -> dict:
     """Acerto do modelo no D0 quando a confiança (Probabilidade Real,
     calibrada) esteve acima do corte, POR CIDADE.
 
@@ -488,7 +490,7 @@ def confidence_report(min_conf: float | None = None,
     Grava backtest_data/confidence_report.json (o workflow commita) e
     retorna o mesmo dicionário."""
     min_conf = min_conf if min_conf is not None else config.EDGE_MIN_CONFIDENCE
-    rows, days, _ = _collect_rows(log)
+    rows, days, _ = data if data is not None else _collect_rows(log)
 
     def novo():
         return {"n": 0, "acertos": 0, "conf_soma": 0.0}
@@ -537,7 +539,7 @@ def confidence_report(min_conf: float | None = None,
 
 
 def simulate(log=lambda m: None, hour_min: int | None = None,
-             hour_max: int | None = None) -> dict:
+             hour_max: int | None = None, data=None) -> dict:
     """Roda a regra de sinais sobre o arquivo inteiro, com a Probabilidade
     Real (modelo calibrado), igual à produção: só cruzamentos NOVOS dentro da
     janela local (config.SIGNAL_HOURS por padrão) viram aposta; quem cruza o
@@ -545,7 +547,8 @@ def simulate(log=lambda m: None, hour_min: int | None = None,
     executável). Retorna estatísticas e as apostas."""
     hour_min = config.SIGNAL_HOURS[0] if hour_min is None else hour_min
     hour_max = config.SIGNAL_HOURS[1] if hour_max is None else hour_max
-    rows, days_seen, res_mismatch = _collect_rows(log)
+    rows, days_seen, res_mismatch = (data if data is not None
+                                     else _collect_rows(log))
     signals = []
     done: set = set()
     for r in rows:
@@ -598,11 +601,14 @@ def simulate(log=lambda m: None, hour_min: int | None = None,
     return _stats(signals, res_mismatch, days_seen)
 
 
-def simulate_harvest(log=lambda m: None) -> dict:
+def simulate_harvest(log=lambda m: None, hour_min: int | None = None,
+                     data=None) -> dict:
     """Estratégia complementar de colheita: comprar o NÃO quase-certo (preço
-    na faixa HARVEST_PRICE_*) após HARVEST_MIN_HOUR local, com o modelo
-    calibrado concordando. Uma aposta por faixa/dia; stop a STOP_EXIT_FRAC."""
-    rows, days_seen, _ = _collect_rows(log)
+    na faixa HARVEST_PRICE_*) após `hour_min` local (padrão:
+    HARVEST_MIN_HOUR), com o modelo calibrado concordando. Uma aposta por
+    faixa/dia; stop a STOP_EXIT_FRAC."""
+    hour_min = config.HARVEST_MIN_HOUR if hour_min is None else hour_min
+    rows, days_seen, _ = (data if data is not None else _collect_rows(log))
     signals = []
     done: set = set()
     for r in rows:
@@ -610,7 +616,7 @@ def simulate_harvest(log=lambda m: None) -> dict:
         if key in done:
             continue
         yes = r["yes"]
-        if (yes is None or r["hour"] < config.HARVEST_MIN_HOUR
+        if (yes is None or r["hour"] < hour_min
                 or r["hour"] > config.SIGNAL_HOURS[1]):
             continue
         price = 1.0 - yes

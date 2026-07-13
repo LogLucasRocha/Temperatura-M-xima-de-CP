@@ -43,22 +43,25 @@ def main() -> int:
         added = backtest.harvest(log)
         log(f"harvest: {added} dia(s) novo(s) arquivado(s).")
 
-    # Reajusta a curva de calibração com o arquivo atualizado; a simulação
-    # (e a produção) usam a probabilidade calibrada.
-    cal = backtest.fit_calibration(log)
-    stats = backtest.simulate(log)
-    conf = backtest.confidence_report(log=log)
+    # Reconstrução única compartilhada por todas as análises; a calibração é
+    # reajustada antes das simulações (que usam a probabilidade calibrada).
+    data = backtest._collect_rows(log)
+    cal = backtest.fit_calibration(log, data=data)
+    stats = backtest.simulate(log, data=data)
+    conf = backtest.confidence_report(log=log, data=data)
     fontes = backtest.check_resolution_sources(log)
-    harvest = backtest.simulate_harvest(log)
     text = backtest.report_text(stats)
-    if harvest["n"]:
-        text += (f"\n🌾 <b>Colheita</b> (NÃO "
-                 f"${config.HARVEST_PRICE_MIN:.2f}–"
-                 f"{config.HARVEST_PRICE_MAX:.3f} após "
-                 f"{config.HARVEST_MIN_HOUR}h): {harvest['n']} apostas · "
-                 f"{harvest['hit']:.0%} acerto · composto "
-                 f"{harvest['compounded']:.2f}x · dd {harvest['maxdd']:.0%} "
-                 f"· {harvest['n_stopped']} stops")
+    # Colheita: a variante ATIVA + as alternativas 14h e 12h, para comparar.
+    horas = sorted({config.HARVEST_MIN_HOUR, 14, 12}, reverse=True)
+    for h in horas:
+        hv = backtest.simulate_harvest(log, hour_min=h, data=data)
+        if not hv["n"]:
+            continue
+        marca = " ✅ATIVA" if h == config.HARVEST_MIN_HOUR else ""
+        text += (f"\n🌾 <b>Colheita {h}h</b>{marca}: {hv['n']} apostas · "
+                 f"{hv['hit']:.0%} acerto · composto "
+                 f"{hv['compounded']:.2f}x · dd {hv['maxdd']:.0%} · "
+                 f"{hv['n_stopped']} stops")
     if fontes:
         text += ("\n🚨 <b>FONTE DE RESOLUÇÃO MUDOU</b> — a descrição do "
                  "mercado não cita mais a estação esperada: "
