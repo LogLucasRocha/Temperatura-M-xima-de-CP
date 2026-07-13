@@ -26,7 +26,7 @@ import sys
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from tmax import backtest, config, notify
+from tmax import backtest, config, notify, results
 
 
 def main() -> int:
@@ -52,9 +52,10 @@ def main() -> int:
     fontes = backtest.check_resolution_sources(log)
     text = backtest.report_text(stats)
     # Colheita: a variante ATIVA + as alternativas 14h e 12h, para comparar.
-    horas = sorted({config.HARVEST_MIN_HOUR, 14, 12}, reverse=True)
-    for h in horas:
+    harvests: dict[int, dict] = {}
+    for h in sorted({config.HARVEST_MIN_HOUR, 14, 12}, reverse=True):
         hv = backtest.simulate_harvest(log, hour_min=h, data=data)
+        harvests[h] = hv
         if not hv["n"]:
             continue
         marca = " ✅ATIVA" if h == config.HARVEST_MIN_HOUR else ""
@@ -62,6 +63,17 @@ def main() -> int:
                  f"{hv['hit']:.0%} acerto · composto "
                  f"{hv['compounded']:.2f}x · dd {hv['maxdd']:.0%} · "
                  f"{hv['n_stopped']} stops")
+
+    # Estratégia combinada (Edge + colheita ativa na mesma banca) e persistência
+    # dos resultados + números do documento LaTeX.
+    active = harvests.get(config.HARVEST_MIN_HOUR, {"signals": []})
+    combined = backtest._stats(
+        stats["signals"] + active.get("signals", []), 0, stats["days"])
+    try:
+        results.persist(stats, harvests, combined, conf, cal, stats["days"])
+        log("resultados persistidos (backtest_results/ + docs/).")
+    except Exception as exc:  # noqa: BLE001 — persistência é acessória
+        log(f"AVISO: falha ao persistir resultados ({exc}).")
     if fontes:
         text += ("\n🚨 <b>FONTE DE RESOLUÇÃO MUDOU</b> — a descrição do "
                  "mercado não cita mais a estação esperada: "

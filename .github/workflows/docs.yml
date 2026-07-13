@@ -1,0 +1,41 @@
+name: Compilar documentação (PDF)
+
+# Compila docs/tmax.tex quando o .tex ou os números gerados mudam (o backtest
+# atualiza generated_numbers.tex a cada 3 dias) e commita o PDF. O filtro de
+# paths ignora o próprio PDF, evitando laço; o commit usa [skip ci] por garantia.
+on:
+  push:
+    paths:
+      - "docs/**.tex"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-pdf
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compilar LaTeX -> PDF
+        uses: xu-cheng/latex-action@v3
+        with:
+          working_directory: docs
+          root_file: tmax.tex
+          latexmk_use_xelatex: false
+
+      - name: Commitar o PDF
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/tmax.pdf
+          git diff --cached --quiet || {
+            git commit -m "Recompila docs/tmax.pdf [skip ci]"
+            git push
+          }

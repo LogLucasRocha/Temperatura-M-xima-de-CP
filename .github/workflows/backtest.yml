@@ -68,9 +68,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backtest_data tmax/calibration.json
+          git add backtest_data tmax/calibration.json \
+                  backtest_results docs/generated_numbers.tex
           git diff --cached --quiet || {
-            git commit -m "Arquiva dados de backtest e recalibra ($(date -u +%F))"
+            git commit -m "Arquiva dados, recalibra e atualiza docs ($(date -u +%F))"
             git push
           }
 

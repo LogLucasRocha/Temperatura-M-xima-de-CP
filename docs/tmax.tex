@@ -1,0 +1,355 @@
+% ===================================================================
+%  Documentacao tecnica e didatica do pipeline de Tmax + Polymarket.
+%  Os numeros do backtest vem de generated_numbers.tex, regenerado a
+%  cada rodada do workflow de backtest — este documento nunca desatualiza.
+%  Compile com: latexmk -pdf tmax.tex   (ou use Overleaf)
+% ===================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+
+\input{generated_numbers.tex}
+
+\definecolor{azul}{HTML}{1A5FB4}
+
+% ---- ambiente de exercicios + resposta acumulada -----------------
+\newcounter{exc}[section]
+\renewcommand{\theexc}{\thesection.\arabic{exc}}
+\newenvironment{exercicio}{\refstepcounter{exc}\medskip\noindent
+  \textbf{\color{azul}Exercício \theexc.}\ }{\medskip}
+
+\pagestyle{fancy}\fancyhf{}
+\lhead{\small Trading Sistemático de Tmax}
+\rhead{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\title{\textbf{Trading Sistemático de Temperatura Máxima}\\
+  \large Documentação técnica e guia de estudo --- SBGR, SAEZ, UUWW e mais}
+\author{Pipeline \texttt{tmax/} --- mercados de temperatura na Polymarket}
+\date{Números do backtest atualizados em \btUpdated}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstract}
+\noindent Este documento descreve, com a matemática e a estatística por trás,
+como o pipeline transforma previsões meteorológicas em decisões de trade em
+mercados binários de temperatura máxima, e como validamos essas decisões com
+backtests. É também um guia de estudo: cada seção termina com exercícios
+(gabarito no apêndice). \textbf{Não é aconselhamento financeiro} --- mercados
+de previsão envolvem risco de perda total do capital, e o \emph{edge} estimado
+aqui é um modelo, não uma garantia.
+\end{abstract}
+
+\tableofcontents
+\bigskip
+
+% ===================================================================
+\section{Visão geral}
+% ===================================================================
+O objetivo é comparar, para cada faixa de um mercado do tipo ``a máxima de hoje
+vai ser $N^\circ$C?'', a nossa probabilidade estimada com a probabilidade
+implícita pelo preço, e agir quando as duas divergem o suficiente e o modelo
+está calibradamente confiante.
+
+O sistema tem três camadas:
+\begin{enumerate}
+  \item \textbf{Previsão} (Seção~\ref{sec:previsao}): ensembles numéricos +
+    correção de viés + observações em tempo real $\rightarrow$ uma
+    \emph{distribuição de probabilidade} da máxima do dia.
+  \item \textbf{Precificação e calibração} (Seções~\ref{sec:mercado}
+    e~\ref{sec:calib}): a distribuição vira probabilidade por faixa de mercado,
+    corrigida por uma curva de calibração empírica.
+  \item \textbf{Estratégia e risco} (Seções~\ref{sec:estrategia}
+    e~\ref{sec:risco}): quando comprar, quanto apostar, quando sair.
+\end{enumerate}
+
+Hoje o sistema é \emph{somente-leitura}: monitora \btStations{} cidades,
+manda alertas ao Telegram e mede tudo com backtests; a ordem na Polymarket é
+executada manualmente. Estações que resolvem em Fahrenheit foram catalogadas
+mas ficam fora de operação.
+
+\begin{exercicio}
+Num binário, o preço do ``Sim'' (entre 0 e 1) é interpretado como a
+probabilidade que o mercado atribui ao evento. Se o ``Sim'' custa \$0,40, qual
+a probabilidade implícita do ``Não''?
+\end{exercicio}
+
+% ===================================================================
+\section{Da previsão à distribuição}\label{sec:previsao}
+% ===================================================================
+
+\subsection{Por que ensemble}
+Um modelo de tempo é um sistema caótico: erros minúsculos na condição inicial
+crescem exponencialmente. Um \emph{ensemble} roda o mesmo modelo várias vezes
+com perturbações na condição inicial (ECMWF ENS: 51 membros; GEFS: 31). Cada
+membro é uma amostra do futuro possível; a fração de membros acima de um limiar
+estima a probabilidade de excedê-lo. Usamos $\sim$82 membros.
+
+\subsection{Correção de viés (\texttt{bias.py})}
+Modelos globais têm erro sistemático num ponto específico. Estimamos, por
+família de modelo $m$, ao longo dos últimos 60 dias:
+\begin{align}
+  \text{viés}_m &= \frac{1}{n}\sum_{d=1}^{n}\bigl[\hat T_m(d) - T_{\text{obs}}(d)\bigr],
+    \qquad n \ge 15,\\
+  \sigma^{\text{res}}_m &= \sqrt{\tfrac{1}{n-1}\sum_{d=1}^{n}
+    \bigl[\hat T_m(d) - T_{\text{obs}}(d) - \text{viés}_m\bigr]^2 }.
+\end{align}
+A previsão corrigida é $\hat T_m - \text{viés}_m$; o desvio residual
+$\sigma^{\text{res}}_m$ é o erro que \emph{sobra} e vira o $\sigma$ do membro na
+mistura (Seção~\ref{sec:mistura}).
+
+\subsection{Nowcast intradiário}
+Durante o dia, o observado pesa mais que o modelo. Medimos o desvio médio entre
+o METAR e a média do ensemble corrigido nas últimas 3 horas e deslocamos as
+horas restantes por uma fração amortecida:
+\begin{equation}
+  \text{offset} = \operatorname*{mean}_{\text{últ. 3h}}
+    \bigl[T_{\text{obs}}(h) - \bar T^{\text{corr}}_{\text{ens}}(h)\bigr],
+  \qquad
+  \text{shift} = 0{,}7 \cdot w(h)\cdot \text{offset},
+\end{equation}
+com $w(h)=\operatorname{clamp}\!\bigl(\tfrac{h-6}{6},\,0{,}25,\,1\bigr)$. O
+fator $0{,}7$ evita perseguir ruído; $w(h)$ reduz o peso da madrugada, quando
+nevoeiro e inversão térmica enganam.
+
+\subsection{Mistura de gaussianas}\label{sec:mistura}
+Para cada membro $i$, a máxima corrigida do dia é
+$\hat T_i = \max(\text{obs\_max},\ \max_h[\text{horas futuras corrigidas}]+\text{shift})$.
+A distribuição da máxima é a \emph{média} das CDFs (mistura com pesos iguais):
+\begin{equation}
+  F(x) = \Pr(T_{\max}\le x) = \frac{1}{M}\sum_{i=1}^{M}
+    \Phi\!\left(\frac{x-\hat T_i}{\sigma_i}\right),
+  \qquad
+  \sigma_i = \max\!\bigl(\sigma^{\text{res}}_{\text{fam}(i)}\cdot f_{\text{rest}},\ 0{,}3\bigr),
+\end{equation}
+com $f_{\text{rest}}=\operatorname{clamp}(\tfrac{17-h}{12},0{,}2,1)$ ---
+a incerteza encolhe à tarde. Duas cirurgias que os backtests motivaram:
+\begin{itemize}
+  \item \textbf{Truncagem:} $F(x)=0$ para $x<\text{obs\_max}$ --- a máxima nunca
+    fica abaixo do já observado.
+  \item \textbf{Trava:} quando o pico \emph{observado} já passou (3 horas
+    seguidas abaixo da máxima) e nenhuma hora futura chega perto, $\sigma_i$
+    colapsa para $0{,}05$. Exige a trava \emph{observacional} --- colapsar por
+    previsão (o ensemble ``achando'' que a tarde não esquenta) gerava certezas
+    falsas de manhã.
+\end{itemize}
+Os quantis (P10/P50/P90) saem por bissecção sobre $F$.
+
+\begin{exercicio}
+O viés do ECMWF em Guarulhos é $-0{,}7^\circ$C e o modelo prevê máxima de
+$24{,}0^\circ$C. Qual a previsão corrigida? Se $\sigma^{\text{res}}=0{,}9$ e
+$f_{\text{rest}}=1$, qual o $\sigma$ do membro?
+\end{exercicio}
+\begin{exercicio}
+Mistura de dois membros, $\mathcal N(25,1)$ e $\mathcal N(27,1)$. Calcule
+$\Pr(T_{\max}\le 26)$ usando $\Phi(1)=0{,}841$ e $\Phi(-1)=0{,}159$.
+\end{exercicio}
+
+% ===================================================================
+\section{Do modelo ao mercado}\label{sec:mercado}
+% ===================================================================
+\subsection{Faixas, arredondamento e unidades}
+O mercado resolve pela máxima \emph{arredondada ao inteiro} na unidade da
+cidade. A faixa ``$N^\circ$C'' cobre $[N-0{,}5,\,N+0{,}5)$; ``entre $A$--$B\,^\circ$F''
+cobre $[A-0{,}5,\,B+0{,}5)$ em Fahrenheit. Como a distribuição interna é em
+$^\circ$C, faixas em $^\circ$F são convertidas nas \emph{bordas}:
+$c(f)=(f-32)\cdot 5/9$. A probabilidade da faixa $[A,B]$ é
+\begin{equation}
+  \Pr(\text{Sim}) = F\!\bigl(c(B+0{,}5)\bigr) - F\!\bigl(c(A-0{,}5)\bigr).
+\end{equation}
+
+\subsection{Edge e valor esperado}
+Num binário, o preço do Sim \emph{é} a probabilidade implícita $q$. Pagando $q$
+num evento com probabilidade real $p$:
+\begin{equation}
+  \mathrm{EV}\text{ por \$1} = p\cdot\Bigl(\tfrac{1}{q}-1\Bigr) - (1-p)
+    = \frac{p-q}{q}.
+\end{equation}
+O \emph{edge} em pontos percentuais é $p-q$. O EV relativo cresce quando $q$ é
+pequeno --- por isso ``bilhetes de loteria'' baratos dominam o P\&L de backtests
+ingênuos e merecem desconfiança (preço fino não executa).
+
+\begin{exercicio}
+Mercado NYC ``entre 78--79$^\circ$F''. Converta as bordas da faixa para
+$^\circ$C.
+\end{exercicio}
+\begin{exercicio}
+Você compra o ``Não'' a \$0,85 e sua probabilidade calibrada do ``Não'' é
+$94\%$. Calcule o edge (p.p.) e o EV por \$1.
+\end{exercicio}
+
+% ===================================================================
+\section{Calibração --- o coração estatístico}\label{sec:calib}
+% ===================================================================
+Um modelo é \emph{calibrado} se, entre os casos em que diz $90\%$, o evento
+ocorre $\sim 90\%$ das vezes. Medimos com o \emph{Brier score} (erro quadrático
+médio da probabilidade; menor é melhor):
+\begin{equation}
+  \text{Brier} = \frac{1}{n}\sum_{i=1}^{n}(p_i - y_i)^2, \qquad y_i\in\{0,1\}.
+\end{equation}
+Diagnóstico sobre $\sim$120 mil pares previsão--desfecho: o modelo cru declara
+$\sim 99\%$ mas acerta entre \confMin{} e \confMax{} nas faixas-dia com
+confiança $\ge 90\%$ (varia por cidade) --- superconfiança nas caudas.
+
+\subsection{Regressão isotônica (PAVA)}
+Ajustamos $g$ monótona não-decrescente minimizando $\sum(g(p_i)-y_i)^2$ pelo
+algoritmo \emph{Pool Adjacent Violators}: percorre os pares ordenados por $p$ e
+funde blocos vizinhos enquanto a média de um bloco anterior for $\ge$ à do
+seguinte. Resultado: um mapa ``probabilidade dita $\to$ frequência real'', por
+\emph{período do dia} (0--5h / 6--11h / 12--23h), porque a superconfiança da
+madrugada (pouca observação) é muito maior que a da tarde.
+
+\subsection{O \emph{blend} com o preço (diagnóstico)}
+Uma regressão logística $y\sim a\,\operatorname{logit}(p_{\text{modelo}})
++ b\,\operatorname{logit}(\text{preço})+c$, por período, mede quem carrega
+informação: de madrugada $a\approx 0$ (o modelo não adiciona nada ao preço);
+à tarde $a>0$ (adiciona). Decisão operacional: os sinais usam só o modelo
+calibrado (o mesmo número da tabela); o blend segue como diagnóstico.
+
+\begin{exercicio}
+O modelo declara $99\%$ em 842 faixas-dia e acerta $86\%$. Qual o Brier
+aproximado dessas previsões? (aproxime $p=0{,}99$ e frequência $0{,}86$.)
+\end{exercicio}
+\begin{exercicio}
+PAVA: pares ordenados por $p$ com desfechos $y=[0,1,0,1,1]$. Quais os blocos e
+os valores finais da isotônica?
+\end{exercicio}
+
+% ===================================================================
+\section{Estratégias operacionais}\label{sec:estrategia}
+% ===================================================================
+\subsection{Estratégia \emph{Edge}}
+Compra o ``Não'' de uma faixa de hoje quando:
+\begin{itemize}
+  \item $|p_{\text{cal}} - q| \ge 5$ p.p. (divergência mínima);
+  \item o lado ``Não'' tem $>90\%$ de chance segundo o modelo calibrado;
+  \item preço do ``Não'' $\ge \$0{,}30$ (não brigar com mercado quase-certo);
+  \item hora local entre 6h e 23h; cruzamento novo (madrugada é descartada).
+\end{itemize}
+Só o lado ``Não'' é operado: o ``Sim'' teve $\sim 41\%$ de acerto (loteria).
+Testamos e \emph{rejeitamos} um teto de edge de 20 p.p.: no lado ``Não'' já
+filtrado, gaps grandes são o modelo vendo a máxima da tarde antes do mercado
+convergir, não erro.
+
+\subsection{Estratégia \emph{Colheita de favoritos}}
+Compra o ``Não'' quase-certo (preço entre \$0,97 e \$0,995), após as
+\harvActiveHour{}h locais, com o modelo concordando. Depois desse horário a
+máxima está praticamente travada e o favorito a 97 centavos é quase-matemática.
+Colhe os últimos centavos de incerteza residual.
+
+\subsection{Stop loss}
+Num binário o preço \emph{é} a probabilidade: cair $15\%$ significa que o
+mercado agora acha o evento $15\%$ menos provável. O stop converte a perda
+potencial total ($-100\%$) numa perda pequena e certa ($-15\%$), ao custo de
+realizar ruído. Vale quando o gatilho é \emph{informativo} (o dado virou --- a
+máxima estourou a faixa) e custa caro quando é só volatilidade.
+
+\begin{exercicio}
+Você entra a \$0,70; o alerta dispara a $-10\%$ e a saída do backtest a
+$-15\%$. Em que preços cada um dispara? Se o evento venceria na resolução,
+quanto o stop custou por \$1 de stake?
+\end{exercicio}
+
+% ===================================================================
+\section{Backtest --- metodologia e resultados atuais}\label{sec:backtest}
+% ===================================================================
+\subsection{Metodologia}
+Para cada dia arquivado reconstruímos, hora a hora, o que o sistema atual teria
+dito: viés ``como era'' (janela de 60 dias terminando 2 dias antes), METARs até
+a hora $h$, ensemble arquivado, nowcast, mistura $\rightarrow$ probabilidade por
+faixa; preço $=$ último negócio (máx.\ 2h de idade); resolução $=$ desfecho
+oficial. Aposta de $10\%$ do capital no primeiro cruzamento da regra, liquidada
+na resolução (ou no stop de $-15\%$). \textbf{Flat} usa sempre $10\%$ do capital
+\emph{inicial} (para comparar regras); \textbf{composto} reinveste $10\%$ do
+capital \emph{corrente} (o ``quanto eu teria'').
+
+\paragraph{Vieses conhecidos.} \emph{Lookahead} do ensemble arquivado
+(otimista); \emph{liquidez} (o último preço de mercado fino não executa em
+tamanho); \emph{in-sample} (a calibração é ajustada no mesmo período --- mitigada
+pelo reajuste a cada 3 dias, com dias novos entrando \emph{depois} do ajuste).
+
+\subsection{Resultados (arquivo de \btDaysCity{} dias-cidade, $\sim$\btSpan{} dias corridos)}
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Estratégia} & \textbf{Entradas} & \textbf{Acerto} & \textbf{Composto}
+  & \textbf{DD máx} & \textbf{Stops}\\
+\midrule
+Edge (Não, simulação histórica) & \edgeN & \edgeHit & \edgeComp\,x & \edgeDD & \edgeStops\\
+Colheita 16h & \harvsixteenN & \harvsixteenHit & \harvsixteenComp\,x & \harvsixteenDD & \harvsixteenStops\\
+Colheita 14h & \harvfourteenN & \harvfourteenHit & \harvfourteenComp\,x & \harvfourteenDD & \harvfourteenStops\\
+Colheita 12h & \harvtwelveN & \harvtwelveHit & \harvtwelveComp\,x & \harvtwelveDD & \harvtwelveStops\\
+\midrule
+\textbf{Combinado (Edge + Colheita \harvActiveHour h)} & \textbf{\combN} & \textbf{\combHit}
+  & \textbf{\combComp\,x} & \textbf{\combDD} & \textbf{\combStops}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Retorno composto do portfólio combinado, anualizando a janela de
+$\sim$\btSpan{} dias para base mensal: \textbf{\combMonthly{} ao mês}
+(in-sample; a expectativa executada realista é mais modesta, tipicamente
+$10$--$20\%$/mês, por causa de liquidez e slippage). Preço médio pago pela
+Edge: \$\edgePrice.
+
+\emph{Estes números são regenerados automaticamente a cada backtest
+(\btUpdated) --- veja \texttt{backtest\_results/} e
+\texttt{generated\_numbers.tex}.}
+
+\begin{exercicio}
+A estratégia Edge fez \edgeN{} entradas em $\sim$\btSpan{} dias. Isso é o
+número de alertas que você recebeu? Explique a diferença entre ``entradas
+simuladas'' e ``mensagens recebidas''.
+\end{exercicio}
+
+% ===================================================================
+\section{Gestão de risco}\label{sec:risco}
+% ===================================================================
+\emph{Kelly} para um binário comprado a $q$ com probabilidade real $p$:
+\begin{equation}
+  f^\star = \frac{p-q}{1-q}\quad(\text{fração da banca; aposte 0 se }p\le q).
+\end{equation}
+Kelly maximiza o crescimento logarítmico \emph{mas} assume $p$ exato --- e a
+Seção~\ref{sec:calib} mostrou que nosso $p$ tem erro. Regra da casa: $\tfrac14$
+de Kelly, teto de $5\%$ por mercado, $10$--$15\%$ somando o dia/cidade (faixas
+do mesmo dia são \emph{uma} aposta), e \emph{circuit breaker} de drawdown
+mensal.
+
+\begin{exercicio}
+Kelly: $p=0{,}90$, preço $q=0{,}80$. Calcule $f^\star$ e $\tfrac14$ de Kelly.
+Com banca de \$2.000, quanto apostar (respeitando o teto de $5\%$)?
+\end{exercicio}
+
+% ===================================================================
+\appendix
+\section{Gabarito}
+\begin{enumerate}
+  \item[\textbf{1.1}] $1-0{,}40=0{,}60=60\%$.
+  \item[\textbf{2.1}] $24{,}0-(-0{,}7)=24{,}7^\circ$C; $\sigma=\max(0{,}9\cdot1;\,0{,}3)=0{,}9$.
+  \item[\textbf{2.2}] $F(26)=\tfrac12[\Phi(1)+\Phi(-1)]=\tfrac12(0{,}841+0{,}159)=0{,}50$.
+  \item[\textbf{3.1}] $c(77{,}5)=(77{,}5-32)\cdot5/9=25{,}28^\circ$C;\ $c(79{,}5)=26{,}39^\circ$C. Faixa $[25{,}28;\,26{,}39)$.
+  \item[\textbf{3.2}] Edge $=94-85=9$ p.p.;\ EV $=(0{,}94-0{,}85)/0{,}85=+10{,}6\%$ por \$1.
+  \item[\textbf{4.1}] $\text{Brier}\approx 0{,}86\cdot(0{,}99-1)^2 + 0{,}14\cdot(0{,}99-0)^2 \approx 0{,}137$ (contra $\sim0{,}01$ se calibrado).
+  \item[\textbf{4.2}] $[1,0]$ viola $\to$ funde em $0{,}5$. Valores finais: $0;\ 0{,}5;\ 0{,}5;\ 1;\ 1$.
+  \item[\textbf{5.1}] Alerta a $0{,}70\cdot0{,}90=\$0{,}63$; saída a $0{,}70\cdot0{,}85=\$0{,}595$. Num vencedor você recebeu $0{,}85$ em vez de $1/0{,}70=1{,}43$ por \$1 de stake $\Rightarrow$ deixou $\sim0{,}58$ na mesa.
+  \item[\textbf{6.1}] NÃO é contagem de alertas. ``Entradas simuladas'' $=$ quantas vezes a regra teria comprado reencenando o histórico; ``mensagens recebidas'' inclui as repetições a cada 10 min enquanto a oportunidade dura (uma oportunidade $=$ muitas mensagens).
+  \item[\textbf{7.1}] $f^\star=(0{,}90-0{,}80)/(1-0{,}80)=0{,}50$;\ $\tfrac14$ Kelly $=12{,}5\%\Rightarrow\$250$, mas o teto de $5\%$ limita a \$100.
+\end{enumerate}
+
+\vfill
+\noindent\rule{\linewidth}{0.4pt}\\
+{\small Repositório \texttt{Temperatura-M-xima-de-CP}. Os números da
+Seção~\ref{sec:backtest} vêm da última rodada do backtest e mudam conforme o
+arquivo cresce. Documento gerado para estudo; revise as fontes antes de operar.}
+
+\end{document}
