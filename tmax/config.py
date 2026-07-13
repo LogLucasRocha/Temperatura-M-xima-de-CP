@@ -160,6 +160,11 @@ DIGEST_STATE_FILE = DATA_DIR / "digest_state.json"
 # abaixo dele (ou na virada do dia).
 EDGE_ALERT_MIN = 0.05
 
+# NOTA (13/07): testamos um TETO de 20 p.p. ("edge grande demais = erro do
+# modelo") e o backtest o rejeitou — no lado NÃO já filtrado, gap grande é o
+# modelo vendo a máxima da tarde antes do mercado, não erro. Ver o histórico
+# do git / relatório da sessão. Mantido sem teto de propósito.
+
 # Confiança mínima do lado indicado pelo sinal: só alerta quando a projeção
 # dá mais de 90% de chance de a aposta sugerida acertar (P(Yes) se o Yes está
 # barato; 1 − P(Yes) se está caro).
