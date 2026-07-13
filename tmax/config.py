@@ -175,6 +175,12 @@ SIGNAL_HOURS = (6, 23)
 # de acerto no NÃO contra 41% no SIM (perfil de loteria) — só o NÃO notifica.
 SIGNAL_SIDES = ("NAO",)
 
+# Preço mínimo do NÃO para sinalizar: NÃO abaixo disso é brigar com um
+# mercado quase-certo do Yes — a autópsia mostrou que esses casos são
+# cara-ou-coroa com book fino (Moscou 08/07 perdeu a $0.04; SAEZ 27/06
+# ganhou a $0.08 por sorte). Com o filtro: 92% de acerto, drawdown 1.5%.
+NAO_MIN_PRICE = 0.30
+
 # Stop loss: alerta quando o mercado precifica a posição este percentual (ou
 # mais) abaixo do preço médio de entrada — repetido a cada rodada enquanto
 # durar. No backtest, a saída simulada acontece a STOP_EXIT_FRAC de perda.

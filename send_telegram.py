@@ -410,6 +410,8 @@ def _is_edge(row: dict) -> bool:
     side = "SIM" if diff > 0 else "NAO"
     if side not in config.SIGNAL_SIDES:
         return False
+    if side == "NAO" and (1.0 - row["yes"]) < config.NAO_MIN_PRICE:
+        return False  # não brigar com mercado quase-certo do Yes
     side_prob = row["mp"] if diff > 0 else 1.0 - row["mp"]
     return side_prob > config.EDGE_MIN_CONFIDENCE
 

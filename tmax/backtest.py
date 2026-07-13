@@ -412,7 +412,10 @@ def _collect_rows(log=lambda m: None) -> tuple[list, int, int]:
                         icao=icao, day=day.isoformat(), hour=t.hour,
                         ts=t_epoch, settle=settle, bi=b["bi"],
                         label=b["label"], yes_won=b["yes_won"], mp=mp,
-                        yes=pts[-1] if pts else None, hist=b["hist"]))
+                        yes=pts[-1] if pts else None, hist=b["hist"],
+                        med=dist["quantiles"][50],
+                        lo=b["lo"], hi=b["hi"], mode=b["mode"],
+                        unit=b["unit"]))
     log(f"{days_seen} dias reconstruídos, {len(rows)} pares "
         "probabilidade × desfecho.")
     return rows, days_seen, res_mismatch
@@ -567,6 +570,8 @@ def simulate(log=lambda m: None, hour_min: int | None = None,
         side = "SIM" if diff > 0 else "NAO"
         if side not in config.SIGNAL_SIDES:
             continue   # lado fora de operação (decisão: só NÃO)
+        if side == "NAO" and (1.0 - yes) < config.NAO_MIN_PRICE:
+            continue   # não brigar com mercado quase-certo do Yes
         price = yes if side == "SIM" else 1.0 - yes
         if price <= 0.005 or price >= 0.995:
             continue
