@@ -26,7 +26,7 @@ import sys
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from tmax import backtest, notify
+from tmax import backtest, config, notify
 
 
 def main() -> int:
@@ -49,7 +49,16 @@ def main() -> int:
     stats = backtest.simulate(log)
     conf = backtest.confidence_report(log=log)
     fontes = backtest.check_resolution_sources(log)
+    harvest = backtest.simulate_harvest(log)
     text = backtest.report_text(stats)
+    if harvest["n"]:
+        text += (f"\n🌾 <b>Colheita</b> (NÃO "
+                 f"${config.HARVEST_PRICE_MIN:.2f}–"
+                 f"{config.HARVEST_PRICE_MAX:.3f} após "
+                 f"{config.HARVEST_MIN_HOUR}h): {harvest['n']} apostas · "
+                 f"{harvest['hit']:.0%} acerto · composto "
+                 f"{harvest['compounded']:.2f}x · dd {harvest['maxdd']:.0%} "
+                 f"· {harvest['n_stopped']} stops")
     if fontes:
         text += ("\n🚨 <b>FONTE DE RESOLUÇÃO MUDOU</b> — a descrição do "
                  "mercado não cita mais a estação esperada: "

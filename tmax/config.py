@@ -187,6 +187,17 @@ NAO_MIN_PRICE = 0.30
 STOP_ALERT_FRAC = 0.10
 STOP_EXIT_FRAC = 0.15
 
+# Colheita de favoritos (estratégia complementar, escolha do Lucas 12/07):
+# comprar o NÃO quando o mercado já está quase certo, dentro desta faixa de
+# preço, a partir desta hora local, com concordância mínima do modelo
+# calibrado. Alerta UMA vez por faixa/dia (o preço fica lá por horas).
+# Backtest 85d/18 cidades: 595 apostas, 99.3%, 1.52x composto, dd 6.2%,
+# 16 stops, zero perdas cheias. (Alternativa mais eficiente: 0.95/14h.)
+HARVEST_PRICE_MIN = 0.97
+HARVEST_PRICE_MAX = 0.995
+HARVEST_MIN_HOUR = 12
+HARVEST_MIN_CONF = 0.85
+
 # Com 25 cidades, o bloco completo (posições+tabela+gráfico+hora a hora) só
 # é enviado para cidades com ATIVIDADE (posição aberta ou sinal na rodada);
 # as demais são monitoradas em silêncio. False = comportamento antigo.

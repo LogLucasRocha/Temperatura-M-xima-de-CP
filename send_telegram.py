@@ -210,6 +210,47 @@ def main() -> int:
                 (skey, key, texto))
     alert_icaos = set(cond_pending)
 
+    # 2d) Colheita de favoritos: NÃO quase-certo (preço na faixa
+    # HARVEST_PRICE_*), após a hora local mínima, com o modelo concordando.
+    # Uma mensagem compacta, UMA vez por faixa/dia (sem repetição).
+    harvest_seen = set(state.get("harvest", []))
+    harvest_lines = []
+    harvest_sent_keys = []
+    for k, v in signal_rows.items():
+        if v["yes"] is None or v["mp"] is None:
+            continue
+        price = 1.0 - v["yes"]
+        if not (config.HARVEST_PRICE_MIN <= price < config.HARVEST_PRICE_MAX):
+            continue
+        conc = 1.0 - v["mp"]
+        if conc < config.HARVEST_MIN_CONF:
+            continue
+        h = dt.datetime.now(config.STATIONS[v["icao"]].tz).hour
+        if not (config.HARVEST_MIN_HOUR <= h <= config.SIGNAL_HOURS[1]):
+            continue
+        if k in harvest_seen:
+            harvest_sent_keys.append(k)  # mantém no estado enquanto vigente
+            continue
+        st_ = config.STATIONS[v["icao"]]
+        harvest_lines.append(
+            f"{st_.flag} {html.escape(st_.city)} · Comprar NÃO "
+            f"<b>{html.escape(v['label'])}</b> @ ${price:.3f} "
+            f"(modelo {conc:.0%}, {h:02d}h local)")
+        harvest_sent_keys.append(k)
+    if harvest_lines:
+        msg = ("🌾 <b>Colheita de favoritos</b> · NÃO quase-certo "
+               f"(${config.HARVEST_PRICE_MIN:.2f}–"
+               f"{config.HARVEST_PRICE_MAX:.3f}, após "
+               f"{config.HARVEST_MIN_HOUR}h local, stop −15%)\n"
+               + "\n".join(harvest_lines))
+        try:
+            notify.send_message(token, chat_id, msg)
+            print(f"[colheita] {len(harvest_lines)} alerta(s) enviado(s).")
+        except Exception as exc:  # noqa: BLE001 — colheita é acessória
+            print(f"[colheita] ERRO: {exc}", file=sys.stderr)
+            harvest_sent_keys = [k for k in harvest_sent_keys
+                                 if k in harvest_seen]
+
     # 3) Sinais: as mensagens são entregues DENTRO do bloco da cidade quando
     # há bloco nesta rodada; repetição de sinal em cidade sem bloco sai
     # sozinha (sem re-enviar gráficos).
@@ -266,7 +307,8 @@ def main() -> int:
                 cond_state[skey] = key
     _save_digest_state({"stations": station_state, "edges": edges_now,
                         "signal_probs": signal_rows,
-                        "cond_alerts": cond_state})
+                        "cond_alerts": cond_state,
+                        "harvest": harvest_sent_keys})
 
     return 1 if len(errors) == len(stations) else 0
 

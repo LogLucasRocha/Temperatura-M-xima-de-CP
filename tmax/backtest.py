@@ -598,6 +598,45 @@ def simulate(log=lambda m: None, hour_min: int | None = None,
     return _stats(signals, res_mismatch, days_seen)
 
 
+def simulate_harvest(log=lambda m: None) -> dict:
+    """Estratégia complementar de colheita: comprar o NÃO quase-certo (preço
+    na faixa HARVEST_PRICE_*) após HARVEST_MIN_HOUR local, com o modelo
+    calibrado concordando. Uma aposta por faixa/dia; stop a STOP_EXIT_FRAC."""
+    rows, days_seen, _ = _collect_rows(log)
+    signals = []
+    done: set = set()
+    for r in rows:
+        key = (r["icao"], r["day"], r["bi"])
+        if key in done:
+            continue
+        yes = r["yes"]
+        if (yes is None or r["hour"] < config.HARVEST_MIN_HOUR
+                or r["hour"] > config.SIGNAL_HOURS[1]):
+            continue
+        price = 1.0 - yes
+        if not (config.HARVEST_PRICE_MIN <= price < config.HARVEST_PRICE_MAX):
+            continue
+        conc = 1.0 - calibration.apply(r["mp"], r["hour"])
+        if conc < config.HARVEST_MIN_CONF:
+            continue
+        done.add(key)
+        stopped, st_ts = False, None
+        stop_lv = price * (1.0 - config.STOP_EXIT_FRAC)
+        for ts, p in r["hist"]:
+            if ts <= r["ts"] or ts >= r["settle"]:
+                continue
+            if (1.0 - p) <= stop_lv:
+                stopped, st_ts = True, ts
+                break
+        signals.append(dict(
+            icao=r["icao"], day=r["day"], hour=r["hour"], label=r["label"],
+            side="NAO", price=price, model=conc, won=not r["yes_won"],
+            stopped=stopped, bet_ts=r["ts"],
+            settle=st_ts if stopped else r["settle"]))
+    log(f"colheita: {len(signals)} apostas simuladas.")
+    return _stats(signals, 0, days_seen)
+
+
 def _stats(signals: list, res_mismatch: int, days_seen: int) -> dict:
     if not signals:
         return {"n": 0, "days": days_seen, "signals": [],
