@@ -249,7 +249,9 @@ def main() -> int:
         h = dt.datetime.now(config.STATIONS[v["icao"]].tz).hour
         if not (config.HARVEST_MIN_HOUR <= h <= config.SIGNAL_HOURS[1]):
             continue
-        linha = (f"🌾 <b>Colheita</b> · Comprar NÃO "
+        stn = config.STATIONS[v["icao"]]
+        linha = (f"🌾 <b>Colheita — {stn.flag} {html.escape(stn.city)} "
+                 f"({v['icao']})</b> · Comprar NÃO "
                  f"<b>{html.escape(v['label'])}</b> @ ${price:.3f} "
                  f"(modelo {conc:.0%}, {h:02d}h local, stop −15%)")
         harvest_pending.setdefault(v["icao"], []).append((k, linha))
