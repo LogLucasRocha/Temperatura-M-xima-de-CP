@@ -13,13 +13,13 @@ Modo silencioso (decisão do Lucas, 12/07) — o Telegram só recebe:
      alguma estação tem novidade.
   2. Alertas de compra: sinais de edge (só NÃO, preço ≥ NAO_MIN_PRICE) e
      colheita de favoritos (HARVEST_*) — ambos REPETEM a cada rodada
-     enquanto a oportunidade existir. Cada alerta vai ENXUTO (só o texto) com
-     um botão inline "📄 Ver relatório completo"; o bloco pesado (tabela,
-     gráfico, hora a hora) NÃO é mais enviado automaticamente — só sob demanda
-     (decisão do Lucas, 13/07, para não poluir o chat).
-  3. Para cidades com posição aberta: apenas avisos pontuais em texto de platô
-     (2h de lado) e fuga do envelope do ensemble, uma vez por episódio (com o
-     mesmo botão do relatório).
+     enquanto a oportunidade existir. Um alerta NOVO chega com o bloco
+     completo da cidade (tabela, gráfico, hora a hora — o contexto da decisão
+     de entrada); repetições vêm sozinhas em texto (decisão do Lucas, 14/07:
+     voltar ao bloco completo no alerta novo).
+  3. Para cidades com posição aberta: SEM bloco — apenas avisos pontuais em
+     texto de platô (2h de lado) e fuga do envelope do ensemble, uma vez por
+     episódio.
   4. Stop loss: claro e urgente, texto puro, toda rodada enquanto o mercado
      estiver ≥ STOP_ALERT_FRAC abaixo da entrada.
 
@@ -153,14 +153,17 @@ def main() -> int:
                 if fps[s.icao] is None
                 or station_state.get(s.icao) != fps[s.icao]}
 
-    # Sinais são computados cedo porque um sinal novo também puxa o resumo de
-    # posições (contexto para decidir a entrada). O alerta em si vai enxuto,
-    # com botão; o bloco completo só sai sob demanda (botão/comando).
+    # Sinais são computados cedo porque um sinal NOVO (não estava na rodada
+    # anterior) puxa junto o resumo de posições e o bloco completo da cidade
+    # (contexto da decisão de entrada); as repetições vêm sozinhas em texto.
     signal_rows = _collect_signal_rows(stations, contexts, yes_prob)
     prev_probs = state.get("signal_probs", {})
     edges_now = {k: v for k, v in signal_rows.items() if _is_edge(v)}
     new_edges = {k: v for k, v in edges_now.items()
                  if _in_signal_window(v["icao"])}
+    prev_edges = state.get("edges", {})
+    fresh_icaos = {v["icao"] for k, v in new_edges.items()
+                   if k not in prev_edges}
 
     # 2) Posições: buscadas TODA rodada (o stop loss precisa do preço atual);
     # o resumo geral é enviado quando há novidade no observado OU quando um
@@ -226,9 +229,7 @@ def main() -> int:
             if cond_state.get(skey) == key:
                 continue  # mesmo episódio já avisado
             try:
-                notify.send_message(token, chat_id, texto,
-                                    reply_markup=notify.report_keyboard(
-                                        station.icao))
+                notify.send_message(token, chat_id, texto)
                 cond_state[skey] = key
                 print(f"[{station.icao}] alerta de condição ({kind}).")
             except Exception as exc:  # noqa: BLE001 — alerta é acessório
@@ -237,8 +238,12 @@ def main() -> int:
 
     # 2d) Colheita de favoritos: NÃO quase-certo (preço na faixa
     # HARVEST_PRICE_*), após a hora local mínima, com o modelo concordando.
-    # REPETE a cada rodada enquanto a oportunidade existir (igual ao edge).
+    # REPETE a cada rodada enquanto a oportunidade existir (igual ao edge);
+    # a PRIMEIRA aparição vem com o bloco da cidade, repetições vêm sozinhas.
+    harvest_seen = set(state.get("harvest", []))
     harvest_pending: dict[str, list] = {}   # todas as vigentes nesta rodada
+    harvest_fresh: set = set()              # cidades com oportunidade NOVA
+    harvest_keep = []
     for k, v in signal_rows.items():
         if v["yes"] is None or v["mp"] is None:
             continue
@@ -257,30 +262,53 @@ def main() -> int:
                  f"<b>{html.escape(v['label'])}</b> @ ${price:.3f} "
                  f"(modelo {conc:.0%}, {h:02d}h local, stop −15%)")
         harvest_pending.setdefault(v["icao"], []).append((k, linha))
+        if k not in harvest_seen:
+            harvest_fresh.add(v["icao"])
 
-    # 3) Alertas de compra (edge + colheita): um por cidade, ENXUTO e com o
-    # botão "📄 Ver relatório completo". O bloco pesado (tabela + gráfico +
-    # hora a hora) NÃO vai mais automaticamente — só sob demanda (botão ou
-    # /relatorio). Os alertas REPETEM a cada rodada enquanto valerem.
+    # 3) Um bloco COMPLETO por cidade com ALERTA DE COMPRA novo (edge ou
+    # colheita) — tabela + gráfico + hora a hora, o contexto da decisão de
+    # entrada. Repetições de sinal/colheita em cidade sem bloco saem sozinhas
+    # em texto. Posições existentes NÃO recebem bloco (ficam com o PnL, os
+    # avisos de condição em texto e o stop). Decisão do Lucas (14/07).
     sig_msgs = dict(_edges_messages(new_edges, prev_probs))
     for station in stations:
         icao = station.icao
-        partes = []
-        if icao in sig_msgs:
-            partes.append(sig_msgs[icao])
-        linhas_hv = [linha for _k, linha in harvest_pending.get(icao, [])]
-        if linhas_hv:
-            partes.append("\n".join(linhas_hv))
-        if not partes:
+        ctx = contexts.get(icao)
+        fp = fps[icao]
+        has_block = icao in fresh_icaos or icao in harvest_fresh
+        if not has_block:
+            # repetições (sinal e colheita) em cidade sem bloco: só o alerta
+            partes = []
+            if icao in sig_msgs:
+                partes.append(sig_msgs[icao])
+            linhas_hv = [linha for _k, linha
+                         in harvest_pending.get(icao, [])]
+            if linhas_hv:
+                partes.append("\n".join(linhas_hv))
+            for texto in partes:
+                try:
+                    notify.send_message(token, chat_id, texto)
+                    print(f"[alertas] {icao}: repetição enviada.")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[alertas] {icao}: ERRO: {exc}", file=sys.stderr)
+            if linhas_hv:
+                harvest_keep += [k for k, _l
+                                 in harvest_pending.get(icao, [])]
             continue
+        # sinal + colheita no TOPO do bloco da cidade
+        pre = ([sig_msgs[icao]] if icao in sig_msgs else [])
+        pre += [linha for _k, linha in harvest_pending.get(icao, [])]
         try:
-            notify.send_message(token, chat_id, "\n\n".join(partes),
-                                reply_markup=notify.report_keyboard(icao))
-            if fps[icao] is not None:
-                station_state[icao] = fps[icao]
-            print(f"[alertas] {icao}: alerta enviado (com botão).")
+            _send_station_block(token, chat_id, station, ctx, positions,
+                                errors, yes_prob, position_success_prob,
+                                pre_msgs=pre)
         except Exception as exc:  # noqa: BLE001 — falha de uma cidade não derruba as demais
-            print(f"[alertas] {icao}: ERRO: {exc}", file=sys.stderr)
+            errors[icao] = str(exc)
+            print(f"[{icao}] ERRO no bloco: {exc}", file=sys.stderr)
+        else:
+            if fp is not None:
+                station_state[icao] = fp
+            harvest_keep += [k for k, _l in harvest_pending.get(icao, [])]
 
     # 4) Comandos e cliques de botão recebidos desde a última rodada
     # (getUpdates). É aqui que o relatório completo sai, sob demanda —
@@ -293,9 +321,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[comandos] ERRO ao processar updates: {exc}", file=sys.stderr)
 
-    _save_digest_state({"stations": station_state,
+    _save_digest_state({"stations": station_state, "edges": edges_now,
                         "signal_probs": signal_rows,
                         "cond_alerts": cond_state,
+                        "harvest": harvest_keep,
                         "pnl_sent_at": state.get("pnl_sent_at", 0),
                         "commands_set": state.get("commands_set", False),
                         "tg_offset": tg_offset})

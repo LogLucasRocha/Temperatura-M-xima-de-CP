@@ -96,10 +96,12 @@ de mandar os alertas, agora **lê os comandos e cliques de botão** (getUpdates)
 na mesma rodada — então a resposta chega com latência de **até ~10 min** (não
 há servidor sempre ligado; foi a opção escolhida para não exigir infra nova).
 
-Modo enxuto: o chat recebe só os **alertas** (sinais de compra, colheita, stop,
-avisos de condição). Cada alerta traz o botão **“📄 Ver relatório completo”**;
-o bloco pesado (tabela mercado × modelo, gráfico, hora a hora) **só é enviado
-sob demanda**, para não poluir o chat.
+Um **alerta de compra novo** (edge ou colheita) chega com o **bloco completo**
+da cidade — tabela mercado × modelo, gráfico e hora a hora, o contexto da
+decisão de entrada. As **repetições** (a cada rodada, enquanto a oportunidade
+dura) vêm sozinhas em texto curto, para não repetir gráficos. Além disso, você
+pode pedir o relatório de qualquer cidade a qualquer momento pelo comando
+abaixo.
 
 Comandos (também no menu “/” do Telegram):
 

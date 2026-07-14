@@ -260,6 +260,35 @@ $-15\%$. Em que preços cada um dispara? Se o evento venceria na resolução,
 quanto o stop custou por \$1 de stake?
 \end{exercicio}
 
+\subsection{Como os alertas chegam ao vivo (produção)}\label{sec:disparo-vivo}
+O backtest conta \emph{entradas} (uma por faixa/dia, no primeiro cruzamento); o
+que chega ao Telegram segue regras de \emph{entrega} diferentes:
+\begin{itemize}
+  \item \textbf{Modo silencioso:} o chat recebe só alertas (compra, colheita,
+  condição, stop) e o resumo de posições no máximo $1\times$ por hora.
+  \item \textbf{Alerta de compra novo:} chega com o \emph{bloco completo} da
+  cidade (tabela, gráfico, hora a hora) --- o contexto da decisão de entrada.
+  Você também pode pedir o relatório de qualquer cidade a qualquer momento por
+  \texttt{/relatorio}.
+  \item \textbf{Repetição:} \emph{edge} e colheita repetem a cada rodada
+  ($\sim$10\,min) enquanto a oportunidade durar; as repetições vêm sozinhas em
+  texto curto (sem repetir os gráficos). Uma entrada equivale a muitas
+  mensagens.
+  \item \textbf{Alertas de condição} (só cidades com posição aberta): platô de
+  2h de lado e fuga do envelope do \emph{ensemble} --- uma vez por episódio.
+  \item \textbf{Stop:} dispara a $-10\%$ do preço de entrada e repete toda
+  rodada; a saída de referência do backtest é $-15\%$.
+\end{itemize}
+
+\paragraph{Ao vivo dispara mais que o backtest.} O backtest só considera faixas
+com negócio recente ($\le$2h); ao vivo o alerta usa o preço nominal exibido, e
+por isso também dispara em faixas ilíquidas que o backtest descarta. Medido no
+arquivo atual, são $\sim$18\% mais sinais ao vivo do que a simulação reporta ---
+não é erro, são medições diferentes. Além disso, num único dia os sinais se
+\emph{acumulam} no chat (cada cidade no seu fim de tarde local), enquanto o
+backtest os distribui por data: por isso um dia com 3--4 sinais parece muito,
+mas ainda é um evento raro (o histórico teve no máximo 4 num único dia).
+
 % ===================================================================
 \section{Backtest --- metodologia e resultados atuais}\label{sec:backtest}
 % ===================================================================
