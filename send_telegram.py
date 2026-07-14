@@ -58,7 +58,8 @@ import unicodedata
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from tmax import calibration, config, distribution, notify, pipeline, polymarket
+from tmax import (calibration, capture, config, distribution, notify,
+                  pipeline, polymarket)
 
 
 def main() -> int:
@@ -165,6 +166,14 @@ def main() -> int:
     fresh_icaos = {v["icao"] for k, v in new_edges.items()
                    if k not in prev_edges}
 
+    # Captura ao vivo: previsão derivada (toda rodada) + ensemble bruto (dedup
+    # por ciclo) de cada estação. O mercado é capturado dentro de
+    # _collect_signal_rows (reaproveitando a busca do evento).
+    for s in stations:
+        c = contexts.get(s.icao)
+        if c is not None:
+            _capture_context(s, c)
+
     # 2) Posições: buscadas TODA rodada (o stop loss precisa do preço atual);
     # o resumo geral é enviado quando há novidade no observado OU quando um
     # sinal novo apareceu (contexto para decidir a entrada).
@@ -192,6 +201,8 @@ def main() -> int:
     # 2b) Stop loss: mercado precificando a posição STOP_ALERT_FRAC (ou mais)
     # abaixo da entrada → alerta em TODA rodada enquanto persistir (pedido
     # explícito: não parar de mandar até sumir).
+    _cap(capture.record_stops, dt.datetime.now(dt.timezone.utc),
+         _stop_rows(positions))
     stop_msg = _stop_alerts(positions)
     if stop_msg:
         try:
@@ -309,6 +320,14 @@ def main() -> int:
             if fp is not None:
                 station_state[icao] = fp
             harvest_keep += [k for k, _l in harvest_pending.get(icao, [])]
+            if ctx is not None:
+                _cap(capture.record_report, ctx["now"], icao, ctx["d0"],
+                     _report_snapshot(station, ctx))
+
+    # Captura dos alertas de estratégia desta rodada (entrada e repetições).
+    _cap(capture.record_alerts, dt.datetime.now(dt.timezone.utc),
+         _alert_rows(new_edges, prev_edges, harvest_pending, harvest_seen,
+                     signal_rows))
 
     # 4) Comandos e cliques de botão recebidos desde a última rodada
     # (getUpdates). É aqui que o relatório completo sai, sob demanda —
@@ -328,6 +347,13 @@ def main() -> int:
                         "pnl_sent_at": state.get("pnl_sent_at", 0),
                         "commands_set": state.get("commands_set", False),
                         "tg_offset": tg_offset})
+
+    # Consolida no arquivo definitivo (dados/) os dias de buffer JÁ FECHADOS —
+    # na prática, 1x/dia, na 1ª rodada após 00:00 UTC. O workflow commita
+    # dados/ se algo mudou.
+    changed = _cap(capture.flush)
+    if changed:
+        print(f"[captura] {len(changed)} arquivo(s) consolidado(s) em dados/.")
 
     return 1 if len(errors) == len(stations) else 0
 
@@ -352,7 +378,10 @@ def _collect_signal_rows(stations, contexts, yes_prob) -> dict:
         except Exception as exc:  # noqa: BLE001 — sinal é acessório
             print(f"[sinais] ERRO evento {slug}: {exc}", file=sys.stderr)
             continue
-        for r in polymarket.odds_rows(event, yes_prob):
+        odds = polymarket.odds_rows(event, yes_prob)
+        # Captura de mercado: reaproveita esta busca (sem fetch extra).
+        _cap(capture.record_market, ctx["now"], station.icao, day, odds)
+        for r in odds:
             if r["yes"] is None or r["mp"] is None:
                 continue
             key = f"{station.icao}:{day.isoformat()}:{r['label']}"
@@ -536,6 +565,127 @@ def _save_digest_state(state: dict) -> None:
         config.DIGEST_STATE_FILE.write_text(json.dumps(state), "utf-8")
     except OSError as exc:
         print(f"AVISO: não salvou o estado do digest ({exc})", file=sys.stderr)
+
+
+# ------------------------------------------------------------- captura de dados
+
+def _cap(fn, *args, **kwargs):
+    """Executa uma gravação de captura sem NUNCA derrubar o digest."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 — captura é 100% acessória
+        print(f"[captura] ERRO em {getattr(fn, '__name__', fn)}: {exc}",
+              file=sys.stderr)
+        return None
+
+
+def _capture_context(station, ctx) -> None:
+    """Grava a previsão derivada (a cada rodada) e o ensemble bruto (dedup por
+    ciclo) de uma estação, tudo a partir do contexto já calculado (sem fetch)."""
+    now, d0 = ctx["now"], ctx["d0"]
+    dist = ctx["dist_d0"]
+    q = dist["quantiles"]
+    media = sum(b["prob"] * (b["low"] + b["high"]) / 2 for b in dist["buckets"])
+    mm = distribution.member_maxima_for_day(
+        d0, ctx["ens"]["time"], ctx["ens"]["members"], ctx["bias"],
+        now=now, shift=ctx["shift"], obs_max=ctx["obs_max_today"])
+    times, _p10, p50, _p90, _raw = pipeline.hourly_percentiles(
+        ctx["ens"]["time"], ctx["ens"]["members"], ctx["bias"],
+        ctx["shift"], now, days={d0})
+    valid = [(t, v) for t, v in zip(times, p50) if v is not None]
+    pico_hora = max(valid, key=lambda tv: tv[1])[0].hour if valid else None
+    _cap(capture.record_forecast, now, station.icao, d0,
+         media=round(media, 2), mediana=q.get(50),
+         piso_ens=(round(min(mm), 2) if mm else None),
+         teto_ens=(round(max(mm), 2) if mm else None),
+         p10=q.get(10), p90=q.get(90), pico_hora=pico_hora,
+         obs_max=ctx["obs_max_today"], nowcast_shift=ctx["shift"],
+         travada=ctx["tmax_locked"])
+    members = {f"{m}:{mid}": s for (m, mid), s in ctx["ens"]["members"].items()}
+    _cap(capture.record_ensemble, now, station.icao, d0,
+         ctx["ens"]["time"], members, ctx["bias"])
+
+
+def _report_snapshot(station, ctx) -> dict:
+    """Snapshot serializável do contexto no momento de um alerta (caixa-preta)."""
+    dist = ctx["dist_d0"]
+    lm = ctx["latest_metar"]
+    times, p10, p50, p90, _raw = pipeline.hourly_percentiles(
+        ctx["ens"]["time"], ctx["ens"]["members"], ctx["bias"],
+        ctx["shift"], ctx["now"], days={ctx["d0"]})
+    hourly = [{"hora": t.strftime("%Y-%m-%dT%H:%M"), "p10": a, "p50": b,
+               "p90": c} for t, a, b, c in zip(times, p10, p50, p90)
+              if b is not None]
+    return {
+        "icao": station.icao, "dia": ctx["d0"].isoformat(),
+        "now": ctx["now"].strftime("%Y-%m-%dT%H:%M%z"),
+        "obs_max": ctx["obs_max_today"], "tmax_locked": ctx["tmax_locked"],
+        "latest_metar": (None if not lm else {
+            "temp": lm["temp"],
+            "time": lm["time"].strftime("%Y-%m-%dT%H:%M")}),
+        "nowcast_shift": ctx["shift"],
+        "quantiles": {str(k): v for k, v in dist["quantiles"].items()},
+        "buckets": dist["buckets"], "exceed": dist.get("exceed"),
+        "taf_tx_d0": ctx["taf_tx_d0"], "hourly": hourly,
+    }
+
+
+def _stop_rows(positions: list) -> list[dict]:
+    """Linhas estruturadas das posições >STOP_ALERT_FRAC abaixo da entrada."""
+    out = []
+    for p in positions:
+        if p.get("redeemable"):
+            continue
+        try:
+            avg = float(p.get("avgPrice") or 0)
+            cur = float(p.get("curPrice") or 0)
+            val = float(p.get("currentValue") or 0)
+        except (TypeError, ValueError):
+            continue
+        if avg <= 0 or val < polymarket.DUST_USD:
+            continue
+        dd = 1.0 - cur / avg
+        if dd < config.STOP_ALERT_FRAC:
+            continue
+        pm = polymarket.parse_temp_market(p.get("title"))
+        out.append({
+            "icao": pm["icao"] if pm else None,
+            "dia": str(p.get("endDate") or "")[:10] or None,
+            "faixa": str(p.get("title") or "")[:80],
+            "lado": p.get("outcome"),
+            "entrada": round(avg, 4), "atual": round(cur, 4),
+            "queda_pct": round(dd * 100, 1)})
+    return out
+
+
+def _alert_rows(new_edges, prev_edges, harvest_pending, harvest_seen,
+                signal_rows) -> list[dict]:
+    """Linhas estruturadas de todo alerta de estratégia desta rodada, com a
+    flag `repeticao` separando a entrada (1ª vez) das repetições."""
+    rows = []
+    for k, v in new_edges.items():
+        st = config.STATIONS[v["icao"]]
+        rows.append({
+            "icao": v["icao"], "dia": k.split(":")[1], "estrategia": "edge",
+            "faixa": v["label"], "lado": "NAO",
+            "preco": round(1.0 - v["yes"], 4), "modelo": round(1.0 - v["mp"], 4),
+            "edge_pp": round(abs(v["mp"] - v["yes"]) * 100, 1),
+            "hora_local": dt.datetime.now(st.tz).hour,
+            "repeticao": k in prev_edges})
+    for icao, lst in harvest_pending.items():
+        st = config.STATIONS[icao]
+        for k, _linha in lst:
+            v = signal_rows.get(k)
+            if not v:
+                continue
+            rows.append({
+                "icao": icao, "dia": k.split(":")[1], "estrategia": "colheita",
+                "faixa": v["label"], "lado": "NAO",
+                "preco": round(1.0 - v["yes"], 4),
+                "modelo": round(1.0 - v["mp"], 4), "edge_pp": None,
+                "hora_local": dt.datetime.now(st.tz).hour,
+                "repeticao": k in harvest_seen})
+    return rows
 
 
 # --------------------------------------------------- comandos (recebimento)

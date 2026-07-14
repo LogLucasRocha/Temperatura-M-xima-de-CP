@@ -6,7 +6,7 @@ on:
   workflow_dispatch:        
 
 permissions:
-  contents: read
+  contents: write  # commitar o arquivo de dados ao vivo (dados/) 1x/dia
   actions: write   # watchdog: disparar o backtest se o agendado for pulado
 
 concurrency:
@@ -48,6 +48,28 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           POLYMARKET_WALLET: ${{ vars.POLYMARKET_WALLET }}
         run: python send_telegram.py
+
+      # Arquivo de dados ao vivo: o send_telegram acumula num buffer no cache
+      # (data/capture) e, quando o dia UTC fecha, consolida em dados/*.parquet.
+      # Este passo commita dados/ só quando há novidade — na prática 1x/dia,
+      # na 1ª rodada após 00:00 UTC. Nunca derruba o job (arquivo é acessório).
+      - name: Commitar arquivo de dados ao vivo
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dados
+          if git diff --cached --quiet; then
+            echo "sem dados novos para commitar"; exit 0
+          fi
+          git commit -m "Arquiva dados ao vivo ($(date -u +%F)) [skip ci]"
+          for i in 1 2 3 4; do
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push falhou (tentativa $i) — rebase e retry"
+            git pull --rebase origin main || true
+            sleep $((i * 3))
+          done
+          echo "não consegui commitar o arquivo de dados (segue sem falhar)"; exit 0
 
       # O agendador do GitHub pula/atrasa crons com frequência (aconteceu em
       # 13/07: o backtest das 09:00 UTC simplesmente não disparou). Este
