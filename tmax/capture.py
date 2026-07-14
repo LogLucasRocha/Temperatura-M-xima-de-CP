@@ -13,13 +13,17 @@ Fluxo em duas etapas (para não commitar a cada 10 min):
      o buffer no arquivo definitivo em ``dados/`` (Parquet + JSON.gz), que o
      workflow então commita — na prática, um commit por dia.
 
-Bases (em ``dados/``):
-  mercado/{ICAO}/{AAAA-MM}.parquet     preço de todas as faixas, a cada 10 min
-  previsao/{ICAO}/{AAAA-MM}.parquet    previsão derivada, a cada 10 min
-  alertas/{AAAA-MM}.parquet            todo alerta de edge/colheita (evento)
-  stops/{AAAA-MM}.parquet              posição caindo >10% (evento)
-  ensemble/{ICAO}/{dia}/{ts}.json.gz   ensemble bruto, só quando o ciclo muda
-  relatorios/{ICAO}/{dia}/{ts}.json.gz contexto completo no momento do alerta
+Bases (em ``dados/``). Cada dia vira UM arquivo imutável (nunca reescrito), o
+que mantém o histórico do git enxuto; mesmo assim, para análise, pandas/DuckDB
+leem a pasta inteira como uma base só (``pd.read_parquet("dados/mercado/")``):
+  mercado/{ICAO}/{AAAA-MM-DD}.parquet     preço de todas as faixas, a cada 10 min
+  previsao/{ICAO}/{AAAA-MM-DD}.parquet    previsão derivada, a cada 10 min
+  alertas/{AAAA-MM-DD}.parquet            todo alerta de edge/colheita (evento)
+  stops/{AAAA-MM-DD}.parquet              posição caindo >10% (evento)
+  ensemble/{ICAO}/{dia}/{ts}.json.gz      ensemble bruto, só quando o ciclo muda
+  relatorios/{ICAO}/{dia}/{ts}.json.gz    contexto completo no momento do alerta
+
+Para juntar tudo num arquivo único sob demanda (Excel etc.): tmax/consolidar.py.
 """
 from __future__ import annotations
 
@@ -169,22 +173,24 @@ def _merge_parquet(dest: Path, df: pd.DataFrame, key: list[str]) -> None:
 
 def _flush_series(utc_date: dt.date) -> list[Path]:
     changed: list[Path] = []
-    month = utc_date.strftime("%Y-%m")
+    day = utc_date.isoformat()
     for base, key in _KEYS.items():
-        src = BUFFER_DIR / base / f"{utc_date.isoformat()}.jsonl"
+        src = BUFFER_DIR / base / f"{day}.jsonl"
         if not src.exists():
             continue
         df = pd.read_json(src, lines=True)
         if df.empty:
             src.unlink()
             continue
+        # Um arquivo POR DIA, imutável — nunca reescrito (git enxuto). O
+        # _merge_parquet só age se o arquivo já existir (re-flush raro).
         if base in _PER_ICAO:
             for icao, sub in df.groupby("icao"):
-                dest = ARCHIVE_DIR / base / str(icao) / f"{month}.parquet"
+                dest = ARCHIVE_DIR / base / str(icao) / f"{day}.parquet"
                 _merge_parquet(dest, sub, key)
                 changed.append(dest)
         else:
-            dest = ARCHIVE_DIR / base / f"{month}.parquet"
+            dest = ARCHIVE_DIR / base / f"{day}.parquet"
             _merge_parquet(dest, df, key)
             changed.append(dest)
         src.unlink()
