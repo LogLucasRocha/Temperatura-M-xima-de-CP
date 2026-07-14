@@ -154,6 +154,13 @@ TMAX_LOCK_HOURS = 3
 # Estado do último digest enviado (para omitir estações sem novidade)
 DIGEST_STATE_FILE = DATA_DIR / "digest_state.json"
 
+# Estratégia Edge PAUSADA (decisão do Lucas, 14/07): foco só na colheita.
+# Com False, o digest não computa nem envia sinais de edge; a colheita e o
+# resto (posições, stop, avisos de condição, captura) seguem normais. A captura
+# de mercado/previsão continua, então dá para reconstruir o edge depois. Para
+# reativar, volte para True.
+EDGE_ENABLED = False
+
 # Sinal de edge: divergência mínima |projetado − mercado| numa faixa do dia
 # operável (D0; D+1 quando a máxima de hoje já travou) que dispara a mensagem
 # de alerta. Cada faixa avisa uma vez ao cruzar o corte e re-arma quando cai

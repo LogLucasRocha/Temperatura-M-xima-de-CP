@@ -11,12 +11,13 @@ token e o chat_id guardados como *secrets* do repositório.
 Modo silencioso (decisão do Lucas, 12/07) — o Telegram só recebe:
   1. Resumo geral das posições (PnL): no máximo UMA vez por hora, quando
      alguma estação tem novidade.
-  2. Alertas de compra: sinais de edge (só NÃO, preço ≥ NAO_MIN_PRICE) e
-     colheita de favoritos (HARVEST_*) — ambos REPETEM a cada rodada
-     enquanto a oportunidade existir. Um alerta NOVO chega com o bloco
+  2. Alertas de compra: colheita de favoritos (HARVEST_*). REPETE a cada
+     rodada enquanto a oportunidade existir; um alerta NOVO chega com o bloco
      completo da cidade (tabela, gráfico, hora a hora — o contexto da decisão
-     de entrada); repetições vêm sozinhas em texto (decisão do Lucas, 14/07:
-     voltar ao bloco completo no alerta novo).
+     de entrada), repetições vêm sozinhas em texto. A estratégia Edge está
+     PAUSADA (config.EDGE_ENABLED=False, decisão do Lucas 14/07) — foco só na
+     colheita; a captura de mercado/previsão segue e permite reconstruir o
+     edge depois.
   3. Para cidades com posição aberta: SEM bloco — apenas avisos pontuais em
      texto de platô (2h de lado) e fuga do envelope do ensemble, uma vez por
      episódio.
@@ -159,7 +160,10 @@ def main() -> int:
     # (contexto da decisão de entrada); as repetições vêm sozinhas em texto.
     signal_rows = _collect_signal_rows(stations, contexts, yes_prob)
     prev_probs = state.get("signal_probs", {})
-    edges_now = {k: v for k, v in signal_rows.items() if _is_edge(v)}
+    # Estratégia Edge pausada (config.EDGE_ENABLED): sem edge, o digest opera só
+    # a colheita. Zerar aqui propaga para sig_msgs, fresh_icaos e a captura.
+    edges_now = ({k: v for k, v in signal_rows.items() if _is_edge(v)}
+                 if config.EDGE_ENABLED else {})
     new_edges = {k: v for k, v in edges_now.items()
                  if _in_signal_window(v["icao"])}
     prev_edges = state.get("edges", {})
