@@ -114,9 +114,11 @@ def _stats(signals: list, days: int) -> dict:
     for s in signals:
         by_day[s["day"]].append(s)
     real, rpeak, real_dd = 1.0, 1.0, 0.0
+    per_day = []
     for day in sorted(by_day):
         bets = by_day[day]
-        stake = real / len(bets)
+        nb = len(bets)
+        stake = real / nb
         novo = 0.0
         for s in bets:
             if s["stopped"]:
@@ -124,9 +126,14 @@ def _stats(signals: list, days: int) -> dict:
             elif s["won"]:
                 novo += stake / s["price"]
             # NÃO perdeu inteiro → 0
+        ret = (novo / real - 1.0) if real else 0.0
         real = novo
         rpeak = max(rpeak, real)
-        real_dd = max(real_dd, 1 - real / rpeak)
+        dd_after = (1 - real / rpeak) if rpeak else 0.0
+        real_dd = max(real_dd, dd_after)
+        per_day.append({"day": day, "n": nb,
+                        "wins": sum(1 for s in bets if s["won"]),
+                        "ret": ret, "cap": real, "dd": dd_after})
 
     by = defaultdict(lambda: [0, 0, 0.0])
     for s in signals:
@@ -137,5 +144,5 @@ def _stats(signals: list, days: int) -> dict:
             "n_stopped": n_stopped,
             "avg_price": sum(s["price"] for s in signals) / n,
             "flat": flat, "compounded": cap, "maxdd": maxdd,
-            "real_mult": real, "real_dd": real_dd,
+            "real_mult": real, "real_dd": real_dd, "per_day": per_day,
             "by_city": dict(by), "signals": signals}

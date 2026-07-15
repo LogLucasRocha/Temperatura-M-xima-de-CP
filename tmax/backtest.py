@@ -688,25 +688,34 @@ def ceifa_report_text(st: dict) -> str:
     if st["n"] == 0:
         return (f"🌾 <b>Ceifa — desempenho</b> · {st.get('days', 0)} dia(s) · "
                 f"nenhuma entrada (NÃO em {faixa}, na H-1) ainda.")
-    real = st.get("real_mult")
-    if real is not None:
-        rend = (f"• <b>Rendimento (sem alavancar):</b> R$100 → "
-                f"<b>R${real * 100:.2f}</b> ({(real - 1) * 100:+.1f}%)\n")
-        dd = st.get("real_dd", st.get("maxdd", 0.0))
-    else:
-        rend = f"• <b>Rendimento:</b> composto <b>{st['compounded']:.2f}x</b>\n"
-        dd = st.get("maxdd", 0.0)
-    return (
-        f"🌾 <b>Ceifa — desempenho (nossos snapshots)</b>\n"
+    real = st.get("real_mult", 1.0)
+    dd = st.get("real_dd", st.get("maxdd", 0.0))
+    per_day = st.get("per_day", [])
+    ndias = len(per_day) if per_day else st.get("days", 0)
+
+    linhas = [
+        "🌾 <b>Ceifa — desempenho (nossos snapshots)</b>",
         f"Comprar NÃO em <b>{faixa}</b>, na hora antes do pico (H-1) · "
-        f"{st['days']} dia(s)\n"
-        f"• <b>Testes:</b> {st['n']}\n"
-        f"• <b>Assertividade:</b> {st['hit']:.1%} ({st['wins']}/{st['n']})\n"
-        f"{rend}"
-        f"• <b>Drawdown máx:</b> {dd:.1%} · "
-        f"{st.get('n_stopped', 0)} stop(s) a −{config.STOP_EXIT_FRAC:.0%}\n"
-        f"<i>Rendimento = R$100 espalhado nas apostas de cada dia, sem "
-        f"alavancar, composto dia a dia.</i>")
+        f"{ndias} dia(s) com apostas",
+        f"• <b>Testes:</b> {st['n']} · <b>Assertividade:</b> "
+        f"{st['hit']:.1%} ({st['wins']}/{st['n']})",
+        f"• <b>Rendimento total (sem alavancar):</b> R$100 → "
+        f"<b>R${real * 100:.2f}</b> ({(real - 1) * 100:+.1f}%)",
+        f"• <b>Drawdown máx:</b> {dd:.1%} · {st.get('n_stopped', 0)} "
+        f"stop(s) a −{config.STOP_EXIT_FRAC:.0%}",
+    ]
+    if per_day:
+        linhas.append("\n<b>Por dia</b> (rendimento · drawdown · acumulado):")
+        for d in per_day[-14:]:
+            dm = f"{d['day'][8:10]}/{d['day'][5:7]}"
+            linhas.append(
+                f"• {dm}: {d['n']} ap · {d['wins']}/{d['n']} · "
+                f"<b>{d['ret'] * 100:+.2f}%</b> · dd {d['dd'] * 100:.1f}% · "
+                f"acum. R${d['cap'] * 100:.2f}")
+    linhas.append("<i>Rendimento = R$100 espalhado nas apostas de cada dia, "
+                  "sem alavancar, composto dia a dia. Mostra os últimos 14 "
+                  "dias; o histórico completo fica em dados/.</i>")
+    return "\n".join(linhas)
 
 
 def _stats(signals: list, res_mismatch: int, days_seen: int) -> dict:
