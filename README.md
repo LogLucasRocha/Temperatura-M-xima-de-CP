@@ -97,8 +97,10 @@ na mesma rodada — então a resposta chega com latência de **até ~10 min** (n
 há servidor sempre ligado; foi a opção escolhida para não exigir infra nova).
 
 Estratégia ativa: **Ceifa** (a única no momento — Edge pausado, Colheita
-aposentada). Compra o **NÃO** quando `CEIFA_PRICE_MIN < preço do NÃO <
-CEIFA_PRICE_MAX` (só o preço decide). O alerta **repete até você ter posição**
+aposentada). Compra o **NÃO** na **hora local anterior ao pico previsto (H-1)**
+quando `CEIFA_PRICE_MIN < preço do NÃO < CEIFA_PRICE_MAX` — só entra perto do
+pico, onde o mercado quase-certo é confiável. O alerta **repete até você ter
+posição**
 no contrato; ao detectar a entrada na carteira (`POLYMARKET_WALLET`), para de
 alertar aquele contrato. A 1ª aparição vem com um **bloco enxuto**: gráfico da
 distribuição (ensemble + TAF + mediana) e texto com o **pico previsto** e a

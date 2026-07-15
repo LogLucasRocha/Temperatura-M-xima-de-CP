@@ -12,9 +12,11 @@ Modo silencioso (decisão do Lucas, 12/07) — o Telegram só recebe:
   1. Resumo geral das posições (PnL): no máximo UMA vez por hora, quando
      alguma estação tem novidade.
   2. Alertas de compra — estratégia CEIFA (a única ativa; Edge e Colheita
-     desligadas). Compra o NÃO quando CEIFA_PRICE_MIN < preço do NÃO <
-     CEIFA_PRICE_MAX (só o preço decide). O alerta REPETE a cada rodada ATÉ
-     você ter posição no contrato (a carteira mostra a entrada → para). A 1ª
+     desligadas). Compra o NÃO na hora local ANTERIOR ao pico previsto (H-1)
+     quando CEIFA_PRICE_MIN < preço do NÃO < CEIFA_PRICE_MAX (só o preço, mas
+     só na janela H-1 — perto do pico há pouca incerteza). O alerta REPETE a
+     cada rodada da hora H-1 ATÉ você ter posição no contrato (a carteira
+     mostra a entrada → para). A 1ª
      aparição leva o bloco enxuto: um gráfico com a TRAJETÓRIA hora a hora + a
      distribuição (ensemble + TAF + mediana), e texto com o horário local,
      o pico previsto e a mediana (P10/P90) — SEM tabela de probabilidades;
@@ -263,20 +265,29 @@ def main() -> int:
     ceifa_pending: dict[str, list] = {}     # icao -> [(chave, faixa, preço)]
     ceifa_fresh: set = set()                # cidades com oportunidade NOVA
     ceifa_keep: list = []
+    # H-1: a entrada é SÓ na hora local ANTERIOR ao pico previsto pelo modelo
+    # (H = hora do pico). Perto do pico há pouca incerteza — é onde o mercado
+    # quase-certo é confiável (decisão do Lucas, 15/07).
+    peak_by_icao = {s.icao: _cap(_peak_hour, contexts[s.icao])
+                    for s in stations if s.icao in contexts}
     if config.CEIFA_ENABLED:
         for k, v in signal_rows.items():
+            icao = v["icao"]
             if v["yes"] is None:
                 continue
             price = 1.0 - v["yes"]           # preço do NÃO
             if not (config.CEIFA_PRICE_MIN < price < config.CEIFA_PRICE_MAX):
                 continue
-            if _is_held(held, v["icao"], v["label"]):
+            H = peak_by_icao.get(icao)
+            ctx_i = contexts.get(icao)
+            if H is None or ctx_i is None or ctx_i["now"].hour != (H - 1) % 24:
+                continue                     # fora da janela H-1
+            if _is_held(held, icao, v["label"]):
                 continue                     # já tenho posição → não alerta
-            ceifa_pending.setdefault(v["icao"], []).append(
-                (k, v["label"], price))
+            ceifa_pending.setdefault(icao, []).append((k, v["label"], price))
             ceifa_keep.append(k)
             if k not in ceifa_seen:
-                ceifa_fresh.add(v["icao"])
+                ceifa_fresh.add(icao)
 
     # 3) Um alerta por cidade com oportunidade de Ceifa. A PRIMEIRA aparição
     # leva o bloco enxuto (gráfico da distribuição do ensemble + TAF + mediana,
