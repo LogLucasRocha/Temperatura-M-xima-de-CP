@@ -683,21 +683,30 @@ def simulate_ceifa(log=lambda m: None, data=None) -> dict:
 
 def ceifa_report_text(st: dict) -> str:
     """Relatório da Ceifa (HTML do Telegram) com os 4 números: quantidade de
-    testes, assertividade, rendimento e drawdown."""
+    testes, assertividade, rendimento (realista, sem alavancar) e drawdown."""
     faixa = f"{config.CEIFA_PRICE_MIN:.3f}–{config.CEIFA_PRICE_MAX:.3f}"
     if st["n"] == 0:
-        return (f"🌾 <b>Ceifa — backtest</b> · {st['days']} dias-cidade · "
-                f"nenhuma entrada (NÃO no preço {faixa}) no período.")
+        return (f"🌾 <b>Ceifa — desempenho</b> · {st.get('days', 0)} dia(s) · "
+                f"nenhuma entrada (NÃO em {faixa}, na H-1) ainda.")
+    real = st.get("real_mult")
+    if real is not None:
+        rend = (f"• <b>Rendimento (sem alavancar):</b> R$100 → "
+                f"<b>R${real * 100:.2f}</b> ({(real - 1) * 100:+.1f}%)\n")
+        dd = st.get("real_dd", st.get("maxdd", 0.0))
+    else:
+        rend = f"• <b>Rendimento:</b> composto <b>{st['compounded']:.2f}x</b>\n"
+        dd = st.get("maxdd", 0.0)
     return (
-        f"🌾 <b>Ceifa — desempenho (backtest)</b>\n"
-        f"Comprar NÃO com preço entre <b>{faixa}</b> · "
-        f"{st['days']} dias-cidade de arquivo\n"
+        f"🌾 <b>Ceifa — desempenho (nossos snapshots)</b>\n"
+        f"Comprar NÃO em <b>{faixa}</b>, na hora antes do pico (H-1) · "
+        f"{st['days']} dia(s)\n"
         f"• <b>Testes:</b> {st['n']}\n"
         f"• <b>Assertividade:</b> {st['hit']:.1%} ({st['wins']}/{st['n']})\n"
-        f"• <b>Rendimento:</b> composto <b>{st['compounded']:.2f}x</b> "
-        f"(flat {st['flat']:+.2f}x, preço médio {st['avg_price']:.3f})\n"
-        f"• <b>Drawdown máx:</b> {st['maxdd']:.1%} · "
-        f"{st.get('n_stopped', 0)} stop(s) a −{config.STOP_EXIT_FRAC:.0%}")
+        f"{rend}"
+        f"• <b>Drawdown máx:</b> {dd:.1%} · "
+        f"{st.get('n_stopped', 0)} stop(s) a −{config.STOP_EXIT_FRAC:.0%}\n"
+        f"<i>Rendimento = R$100 espalhado nas apostas de cada dia, sem "
+        f"alavancar, composto dia a dia.</i>")
 
 
 def _stats(signals: list, res_mismatch: int, days_seen: int) -> dict:
