@@ -111,10 +111,29 @@ def station_chart_png(ctx: dict) -> bytes:
 
 def distribution_png(ctx: dict) -> bytes:
     """PNG SÓ com a distribuição da máxima de hoje: barras (ensemble) + mediana
-    do ensemble + TAF. Sem hora a hora e sem os determinísticos — o gráfico da
-    estratégia Ceifa."""
+    do ensemble + TAF. Sem hora a hora e sem os determinísticos."""
     fig, ax = plt.subplots(figsize=(9, 5))
     _draw_dist(ax, ctx["dist_d0"], f"Hoje ({ctx['d0'].strftime('%d/%m')})",
+               det_points=None, taf_tx=ctx["taf_tx_d0"])
+    station = ctx["station"]
+    fig.suptitle(f"{station.city} — {station.icao}",
+                 fontsize=13, fontweight="bold")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def ceifa_chart_png(ctx: dict) -> bytes:
+    """O conjunto da Ceifa num PNG só: em cima a TRAJETÓRIA hora a hora (o
+    andamento da temperatura — observado + mediana corrigida + faixa P10–P90);
+    embaixo a distribuição da máxima (ensemble + TAF + mediana, sem os
+    determinísticos)."""
+    fig = plt.figure(figsize=(9, 8))
+    gs = fig.add_gridspec(2, 1, height_ratios=[1.05, 1], hspace=0.35)
+    _draw_hourly(fig.add_subplot(gs[0, 0]), ctx)
+    _draw_dist(fig.add_subplot(gs[1, 0]), ctx["dist_d0"],
+               f"Hoje ({ctx['d0'].strftime('%d/%m')})",
                det_points=None, taf_tx=ctx["taf_tx_d0"])
     station = ctx["station"]
     fig.suptitle(f"{station.city} — {station.icao}",

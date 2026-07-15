@@ -24,7 +24,7 @@ import sys
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from tmax import backtest, notify
+from tmax import backtest, ceifa, notify
 
 
 def main() -> int:
@@ -34,8 +34,9 @@ def main() -> int:
     args = ap.parse_args()
 
     log = lambda msg: print(msg, flush=True)  # noqa: E731
-    data = backtest._collect_rows(log)
-    st = backtest.simulate_ceifa(log, data=data)
+    # Backtest SÓ nos nossos snapshots capturados (dados/), como pedido —
+    # nada do arquivo reconstruído de APIs.
+    st = ceifa.simulate(log)
     text = backtest.ceifa_report_text(st)
     if st["n"]:
         parts = [f"{k} {v[1] / v[0]:.0%} (n={v[0]})"

@@ -15,10 +15,11 @@ Modo silencioso (decisão do Lucas, 12/07) — o Telegram só recebe:
      desligadas). Compra o NÃO quando CEIFA_PRICE_MIN < preço do NÃO <
      CEIFA_PRICE_MAX (só o preço decide). O alerta REPETE a cada rodada ATÉ
      você ter posição no contrato (a carteira mostra a entrada → para). A 1ª
-     aparição leva o bloco enxuto: gráfico da distribuição (ensemble + TAF +
-     mediana) e texto com o pico previsto e a mediana (P10/P90) — SEM tabela
-     de probabilidades e SEM hora a hora; as repetições vêm em texto curto.
-     O desempenho da Ceifa vai num relatório diário às 06:00 (run_ceifa.py).
+     aparição leva o bloco enxuto: um gráfico com a TRAJETÓRIA hora a hora + a
+     distribuição (ensemble + TAF + mediana), e texto com o horário local,
+     o pico previsto e a mediana (P10/P90) — SEM tabela de probabilidades;
+     as repetições vêm em texto curto. O desempenho da Ceifa vai num relatório
+     diário às 06:00 (run_ceifa.py), medido SÓ nos nossos snapshots (dados/).
   3. Para cidades com posição aberta: SEM bloco — apenas avisos pontuais em
      texto de platô (2h de lado) e fuga do envelope do ensemble, uma vez por
      episódio.
@@ -717,9 +718,11 @@ def _ceifa_text(station, ctx, contratos) -> str:
     for _k, faixa, price in contratos:
         linhas.append(f"• Comprar <b>NÃO {html.escape(str(faixa))}</b> "
                       f"@ ${price:.3f}")
+    agora = ctx["now"].strftime("%H:%M")
     pico_txt = f"{pico:02d}h" if pico is not None else "—"
-    linhas.append(f"📈 Pico previsto: <b>{pico_txt}</b> · Mediana: "
-                  f"<b>{q.get(50):.1f} °C</b> "
+    linhas.append(f"🕐 Agora: <b>{agora}</b> (local) · 📈 Pico previsto: "
+                  f"<b>{pico_txt}</b>")
+    linhas.append(f"📊 Mediana: <b>{q.get(50):.1f} °C</b> "
                   f"(P10 {q.get(10):.1f} · P90 {q.get(90):.1f})")
     return "\n".join(linhas)
 
@@ -742,9 +745,9 @@ def _send_ceifa_block(token, chat_id, station, ctx, contratos) -> None:
     notify.send_message(token, chat_id, notify.station_divider(station))
     notify.send_message(token, chat_id, _ceifa_text(station, ctx, contratos))
     notify.send_photo(
-        token, chat_id, notify.distribution_png(ctx),
-        f"📊 <b>{html.escape(station.city)}</b> — distribuição da máxima de "
-        "hoje (ensemble · TAF · mediana)")
+        token, chat_id, notify.ceifa_chart_png(ctx),
+        f"📈 <b>{html.escape(station.city)}</b> — trajetória hora a hora + "
+        "distribuição da máxima de hoje (ensemble · TAF · mediana)")
 
 
 def _ceifa_alert_rows(ceifa_pending, ceifa_seen, signal_rows) -> list:
