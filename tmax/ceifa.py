@@ -107,6 +107,27 @@ def _stats(signals: list, days: int) -> dict:
         peak = max(peak, cap)
         maxdd = max(maxdd, 1 - cap / peak)
 
+    # Rendimento REALISTA (sem alavancar): a cada dia, espalha 100% do capital
+    # entre as apostas DAQUELE dia (nunca aposta mais do que tem) e compõe dia
+    # a dia. Também o drawdown "de verdade" dessa curva.
+    by_day: dict = defaultdict(list)
+    for s in signals:
+        by_day[s["day"]].append(s)
+    real, rpeak, real_dd = 1.0, 1.0, 0.0
+    for day in sorted(by_day):
+        bets = by_day[day]
+        stake = real / len(bets)
+        novo = 0.0
+        for s in bets:
+            if s["stopped"]:
+                novo += stake * (1 - config.STOP_EXIT_FRAC)
+            elif s["won"]:
+                novo += stake / s["price"]
+            # NÃO perdeu inteiro → 0
+        real = novo
+        rpeak = max(rpeak, real)
+        real_dd = max(real_dd, 1 - real / rpeak)
+
     by = defaultdict(lambda: [0, 0, 0.0])
     for s in signals:
         by[s["icao"]][0] += 1
@@ -116,4 +137,5 @@ def _stats(signals: list, days: int) -> dict:
             "n_stopped": n_stopped,
             "avg_price": sum(s["price"] for s in signals) / n,
             "flat": flat, "compounded": cap, "maxdd": maxdd,
+            "real_mult": real, "real_dd": real_dd,
             "by_city": dict(by), "signals": signals}
