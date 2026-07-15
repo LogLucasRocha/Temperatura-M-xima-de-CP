@@ -1,15 +1,19 @@
-"""Backtest da estratégia Ceifa SOBRE OS NOSSOS SNAPSHOTS (dados/mercado), não
-sobre o arquivo reconstruído de APIs.
+"""Backtest da estratégia Ceifa SOBRE OS NOSSOS SNAPSHOTS (dados/), não sobre o
+arquivo reconstruído de APIs.
 
-Regra: uma entrada por contrato — a PRIMEIRA vez que o preço do NÃO entra na
-banda (CEIFA_PRICE_MIN, CEIFA_PRICE_MAX), em QUALQUER hora. Resolução pela
-convergência do preço: o NÃO venceu se o preço do NÃO no fim do dia foi para
-~1,0. Stop: se depois da entrada o preço do NÃO cair STOP_EXIT_FRAC abaixo da
-entrada, sai realizando −STOP_EXIT_FRAC (o delay de reação: alerta a −10%,
-saída a −15%).
+Regra (decisão do Lucas, 15/07): a entrada é SÓ em H-1 — a hora local anterior
+ao pico previsto pelo modelo (H = pico_hora da base previsao). Nessa hora, se o
+preço do NÃO está na banda (CEIFA_PRICE_MIN, CEIFA_PRICE_MAX), é uma entrada.
+Perto do pico há pouca incerteza — é onde o mercado quase-certo é confiável.
+
+Resolução pela convergência do preço: o NÃO venceu se o preço do NÃO no fim do
+dia foi para ~1,0. Stop: se depois da entrada o preço do NÃO cair
+STOP_EXIT_FRAC abaixo da entrada, sai a −STOP_EXIT_FRAC (alerta a −10%, saída a
+−15% pelo delay de reação).
 """
 from __future__ import annotations
 
+import datetime as dt
 from collections import defaultdict
 
 import pandas as pd
@@ -20,8 +24,8 @@ ARCHIVE = config.ROOT / "dados"
 STAKE_FRAC = 0.10
 
 
-def _load_market() -> pd.DataFrame:
-    root = ARCHIVE / "mercado"
+def _load(base: str) -> pd.DataFrame:
+    root = ARCHIVE / base
     files = sorted(root.rglob("*.parquet")) if root.exists() else []
     if not files:
         return pd.DataFrame()
@@ -30,42 +34,50 @@ def _load_market() -> pd.DataFrame:
     return df.sort_values("ts")
 
 
+def _local_hour(g: pd.DataFrame) -> pd.Series:
+    tz = (config.STATIONS[g.name].tz if g.name in config.STATIONS
+          else dt.timezone.utc)
+    return g["ts"].dt.tz_convert(tz).dt.hour
+
+
 def simulate(log=lambda m: None) -> dict:
-    """Roda a Ceifa nos snapshots e devolve estatísticas no mesmo formato que
-    backtest.ceifa_report_text espera."""
-    mkt = _load_market()
-    if mkt.empty:
-        log("ceifa (snapshots): sem dados capturados ainda.")
+    """Roda a Ceifa (entrada em H-1) nos snapshots e devolve estatísticas no
+    formato que backtest.ceifa_report_text espera."""
+    mkt = _load("mercado")
+    prev = _load("previsao")
+    if mkt.empty or prev.empty:
+        log("ceifa (snapshots): sem dados capturados suficientes ainda.")
         return {"n": 0, "days": 0, "signals": []}
 
-    # resolução por contrato: preço do NÃO no fim do dia
-    fin = (mkt.groupby(["icao", "dia", "faixa"])
-              .agg(nao_final=("preco_nao", "last")).reset_index())
-    fin["resolvido"] = (fin["nao_final"] > 0.90) | (fin["nao_final"] < 0.10)
-    fin["nao_venceu"] = fin["nao_final"] > 0.5
-    finm = fin.set_index(["icao", "dia", "faixa"])
+    # H (hora do pico previsto) por cidade-dia = moda da pico_hora
+    Hs = (prev.dropna(subset=["pico_hora"]).groupby(["icao", "dia"])["pico_hora"]
+             .agg(lambda s: int(s.mode().iat[0])).to_dict())
+    mkt["hloc"] = mkt.groupby("icao", group_keys=False).apply(_local_hour)
 
     pmin, pmax = config.CEIFA_PRICE_MIN, config.CEIFA_PRICE_MAX
     stop = config.STOP_EXIT_FRAC
     signals = []
     for (icao, dia, faixa), g in mkt.groupby(["icao", "dia", "faixa"]):
-        ent = g[(g["preco_nao"] > pmin) & (g["preco_nao"] < pmax)]
-        if ent.empty:
+        H = Hs.get((icao, dia))
+        if H is None:
             continue
-        e = ent.iloc[0]
+        h1 = g[g["hloc"] == ((H - 1) % 24)]      # snapshots na hora H-1
+        if h1.empty:
+            continue
+        e = h1.iloc[-1]                            # último da hora H-1
         entry = float(e["preco_nao"])
-        try:
-            r = finm.loc[(icao, dia, faixa)]
-        except KeyError:
+        if not (pmin < entry < pmax):
             continue
+        nao_final = float(g["preco_nao"].iloc[-1])
+        resolvido = nao_final > 0.90 or nao_final < 0.10
         depois = g[g["ts"] > e["ts"]]
         stopped = bool((depois["preco_nao"] <= entry * (1 - stop)).any())
-        if not (bool(r["resolvido"]) or stopped):
-            continue                      # ainda não resolveu (dia em aberto)
-        won = (not stopped) and bool(r["nao_venceu"])
+        if not (resolvido or stopped):
+            continue                              # dia ainda em aberto
+        won = (not stopped) and (nao_final > 0.5)
         signals.append({"icao": icao, "day": dia, "faixa": faixa,
                         "price": entry, "won": won, "stopped": stopped})
-    log(f"ceifa (snapshots): {len(signals)} apostas.")
+    log(f"ceifa (snapshots, entrada em H-1): {len(signals)} apostas.")
     return _stats(signals, mkt["dia"].nunique())
 
 
