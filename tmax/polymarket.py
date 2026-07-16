@@ -241,11 +241,11 @@ def _position_line(p: dict, prob: float | None = None) -> str:
     end = p.get("endDate")
     end_txt = f" · fecha {str(end)[:10]}" if end else ""
 
+    # A "chance de dar certo agora" foi removida a pedido do Lucas (16/07).
     return (
         f"{dot} {title} — <b>{outcome}</b>\n"
         f"   {size:,.0f} @ ${avg:.3f} → ${cur:.3f} · "
-        f"{_fmt_signed(pnl)} ({pct:+.0f}%){end_txt}"
-        f"{_prob_line(prob)}")
+        f"{_fmt_signed(pnl)} ({pct:+.0f}%){end_txt}")
 
 
 def positions_message(positions: list[dict], prob_fn=None) -> str:
