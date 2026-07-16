@@ -102,6 +102,31 @@ jobs:
             echo "backtest de hoje já rodou (ou está rodando)"
           fi
 
+      # Mesmo problema do cron para o relatório diário da Ceifa (06:00 BRT =
+      # 09:00 UTC). Depois das 09:00 UTC, se o relatório de hoje não rodou nem
+      # está rodando, o watchdog dispara — e repete até um sucesso.
+      - name: Watchdog do relatório da Ceifa
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          hora=$(date -u +%-H); hoje=$(date -u +%F)
+          if [ "$hora" -lt 9 ]; then
+            echo "ainda cedo para o relatório da Ceifa"; exit 0
+          fi
+          runs=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/actions/workflows/ceifa_report.yml/runs?created=$hoje..$hoje&per_page=20")
+          ok=$(echo "$runs" | python3 -c "import json,sys; d=json.load(sys.stdin); print('sim' if any(r['status'] in ('queued','in_progress') or r.get('conclusion')=='success' for r in d.get('workflow_runs',[])) else 'nao')")
+          if [ "$ok" = "nao" ]; then
+            curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/actions/workflows/ceifa_report.yml/dispatches" \
+              -d '{"ref":"main"}'
+            echo "relatório da Ceifa de hoje não rodou — disparado pelo watchdog"
+          else
+            echo "relatório da Ceifa de hoje já rodou (ou está rodando)"
+          fi
+
       - name: Avisar falha no Telegram
         if: failure()
         env:
