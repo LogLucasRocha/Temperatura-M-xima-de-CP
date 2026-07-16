@@ -199,6 +199,11 @@ NAO_MIN_PRICE = 0.30
 STOP_ALERT_FRAC = 0.10
 STOP_EXIT_FRAC = 0.15
 
+# Alertas de condição observada (platô "andou de lado" e fuga do envelope do
+# ensemble "acima do teto / abaixo do piso"). DESLIGADOS (decisão do Lucas,
+# 16/07). Para reativar, True.
+COND_ALERTS_ENABLED = False
+
 # ---------------------------------------------------------------- Ceifa
 # Estratégia ATIVA (decisão do Lucas, 15/07) e a ÚNICA no momento: comprar o
 # NÃO quando o mercado já está quase-certo, com o preço do NÃO nesta faixa —

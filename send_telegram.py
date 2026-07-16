@@ -230,12 +230,11 @@ def main() -> int:
         if pm:
             pos_icaos.add(pm["icao"])
 
-    # 2c) Alertas de condição observada — platô de 2h e fuga do envelope do
-    # ensemble — APENAS para cidades com posição, como MENSAGEM AVULSA em
-    # texto puro (sem bloco/gráficos: geram ansiedade; decisão do Lucas).
-    # Cada episódio avisa uma vez (chave no estado; re-arma quando muda).
+    # 2c) Alertas de condição observada — platô de 2h ("andou de lado") e fuga
+    # do envelope do ensemble ("acima do teto / abaixo do piso"). DESLIGADOS
+    # por config.COND_ALERTS_ENABLED (decisão do Lucas, 16/07). Reversível.
     cond_state = state.get("cond_alerts", {})
-    for station in stations:
+    for station in (stations if config.COND_ALERTS_ENABLED else ()):
         ctx = contexts.get(station.icao)
         if ctx is None or station.icao not in pos_icaos:
             continue
