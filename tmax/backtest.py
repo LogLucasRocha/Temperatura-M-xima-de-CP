@@ -689,11 +689,13 @@ def ceifa_report_text(st: dict) -> str:
         return (f"🌾 <b>Ceifa — desempenho</b> · {st.get('days', 0)} dia(s) · "
                 f"nenhuma entrada (NÃO em {faixa}, na H-1) ainda.")
     real = st.get("real_mult", 1.0)
-    dd = st.get("real_dd", st.get("maxdd", 0.0))
+    dd_max = st.get("real_dd", st.get("maxdd", 0.0))
     per_day = st.get("per_day", [])
     ndias = len(per_day) if per_day else st.get("days", 0)
+    ret_med = (sum(d["ret"] for d in per_day) / len(per_day)) if per_day else 0.0
+    dd_med = (sum(d["dd"] for d in per_day) / len(per_day)) if per_day else 0.0
 
-    linhas = [
+    return "\n".join([
         "🌾 <b>Ceifa — desempenho (nossos snapshots)</b>",
         f"Comprar NÃO em <b>{faixa}</b>, na hora antes do pico (H-1) · "
         f"{ndias} dia(s) com apostas",
@@ -701,21 +703,12 @@ def ceifa_report_text(st: dict) -> str:
         f"{st['hit']:.1%} ({st['wins']}/{st['n']})",
         f"• <b>Rendimento total (sem alavancar):</b> R$100 → "
         f"<b>R${real * 100:.2f}</b> ({(real - 1) * 100:+.1f}%)",
-        f"• <b>Drawdown máx:</b> {dd:.1%} · {st.get('n_stopped', 0)} "
-        f"stop(s) a −{config.STOP_EXIT_FRAC:.0%}",
-    ]
-    if per_day:
-        linhas.append("\n<b>Por dia</b> (rendimento · drawdown · acumulado):")
-        for d in per_day[-14:]:
-            dm = f"{d['day'][8:10]}/{d['day'][5:7]}"
-            linhas.append(
-                f"• {dm}: {d['n']} ap · {d['wins']}/{d['n']} · "
-                f"<b>{d['ret'] * 100:+.2f}%</b> · dd {d['dd'] * 100:.1f}% · "
-                f"acum. R${d['cap'] * 100:.2f}")
-    linhas.append("<i>Rendimento = R$100 espalhado nas apostas de cada dia, "
-                  "sem alavancar, composto dia a dia. Mostra os últimos 14 "
-                  "dias; o histórico completo fica em dados/.</i>")
-    return "\n".join(linhas)
+        f"• <b>Retorno diário médio:</b> {ret_med * 100:+.2f}%",
+        f"• <b>Drawdown diário médio:</b> {dd_med:.1%} (máximo {dd_max:.1%})",
+        f"• {st.get('n_stopped', 0)} stop(s) a −{config.STOP_EXIT_FRAC:.0%}",
+        "<i>Médias por dia; rendimento = R$100 espalhado nas apostas de cada "
+        "dia, sem alavancar, composto dia a dia.</i>",
+    ])
 
 
 def _stats(signals: list, res_mismatch: int, days_seen: int) -> dict:
