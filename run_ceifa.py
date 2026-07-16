@@ -51,6 +51,13 @@ def main() -> int:
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not args.no_telegram and token and chat_id:
         notify.send_message(token, chat_id, text)
+        if st.get("per_day"):
+            try:
+                notify.send_photo(
+                    token, chat_id, notify.equity_chart_png(st["per_day"]),
+                    "📈 Evolução patrimonial da Ceifa (base R$100, sem alavancar)")
+            except Exception as exc:  # noqa: BLE001 — gráfico é acessório
+                print(f"[telegram] falha no gráfico: {exc}", file=sys.stderr)
         print("[telegram] relatório da Ceifa enviado.")
     return 0
 

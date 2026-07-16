@@ -706,8 +706,8 @@ def ceifa_report_text(st: dict) -> str:
         f"• <b>Retorno diário médio:</b> {ret_med * 100:+.2f}%",
         f"• <b>Drawdown diário médio:</b> {dd_med:.1%} (máximo {dd_max:.1%})",
         f"• {st.get('n_stopped', 0)} stop(s) a −{config.STOP_EXIT_FRAC:.0%}",
-        "<i>Médias por dia; rendimento = R$100 espalhado nas apostas de cada "
-        "dia, sem alavancar, composto dia a dia.</i>",
+        "<i>Cada aposta = 10% do capital disponível (trava até o dia fechar); "
+        "a banca liquida no fim do dia e compõe dia a dia. Sem alavancar.</i>",
     ])
 
 

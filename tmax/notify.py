@@ -124,6 +124,31 @@ def distribution_png(ctx: dict) -> bytes:
     return buf.getvalue()
 
 
+def equity_chart_png(per_day: list, inicial: float = 100.0) -> bytes:
+    """Curva de evolução patrimonial da Ceifa: capital ao FIM de cada dia
+    (base R$100). `per_day` = [{day, cap, ...}] com cap = multiplicador."""
+    labels = ["início"] + [f"{d['day'][8:10]}/{d['day'][5:7]}" for d in per_day]
+    caps = [inicial] + [d["cap"] * inicial for d in per_day]
+    fig, ax = plt.subplots(figsize=(9, 4.6))
+    ax.plot(range(len(caps)), caps, "o-", color=BLUE, lw=2.2, ms=6)
+    ax.fill_between(range(len(caps)), inicial, caps,
+                    where=[c >= inicial for c in caps], color=GREEN, alpha=0.12)
+    ax.axhline(inicial, color="#999", lw=1, ls="--")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("R$")
+    ax.set_title("Evolução patrimonial — Ceifa (base R$100, sem alavancar)",
+                 fontsize=12, fontweight="bold")
+    for i, c in enumerate(caps):
+        ax.annotate(f"R${c:.2f}", (i, c), textcoords="offset points",
+                    xytext=(0, 9), ha="center", fontsize=8, color="#333")
+    ax.margins(y=0.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def ceifa_chart_png(ctx: dict) -> bytes:
     """O conjunto da Ceifa num PNG só: em cima a TRAJETÓRIA hora a hora (o
     andamento da temperatura — observado + mediana corrigida + faixa P10–P90);

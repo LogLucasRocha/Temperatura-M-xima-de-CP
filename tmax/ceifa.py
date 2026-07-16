@@ -76,15 +76,10 @@ def simulate(log=lambda m: None) -> dict:
             continue                              # dia ainda em aberto
         won = (not stopped) and (nao_final > 0.5)
         signals.append({"icao": icao, "day": dia, "faixa": faixa,
-                        "price": entry, "won": won, "stopped": stopped})
+                        "ts": e["ts"], "price": entry, "won": won,
+                        "stopped": stopped})
     log(f"ceifa (snapshots, entrada em H-1): {len(signals)} apostas.")
     return _stats(signals, mkt["dia"].nunique())
-
-
-def _pnl_flat(s: dict) -> float:
-    if s["stopped"]:
-        return -STAKE_FRAC * config.STOP_EXIT_FRAC
-    return STAKE_FRAC * (1.0 / s["price"] - 1.0) if s["won"] else -STAKE_FRAC
 
 
 def _stats(signals: list, days: int) -> dict:
@@ -93,56 +88,46 @@ def _stats(signals: list, days: int) -> dict:
         return {"n": 0, "days": days, "signals": []}
     wins = sum(1 for s in signals if s["won"])
     n_stopped = sum(1 for s in signals if s["stopped"])
-    flat = sum(_pnl_flat(s) for s in signals)
 
-    cap, peak, maxdd = 1.0, 1.0, 0.0
-    for s in sorted(signals, key=lambda x: x["day"]):
-        bet = STAKE_FRAC * cap
-        if s["stopped"]:
-            cap -= bet * config.STOP_EXIT_FRAC
-        elif s["won"]:
-            cap += bet * (1.0 / s["price"] - 1.0)
-        else:
-            cap -= bet
-        peak = max(peak, cap)
-        maxdd = max(maxdd, 1 - cap / peak)
-
-    # Rendimento REALISTA (sem alavancar): a cada dia, espalha 100% do capital
-    # entre as apostas DAQUELE dia (nunca aposta mais do que tem) e compõe dia
-    # a dia. Também o drawdown "de verdade" dessa curva.
+    # Modelo de banca (pedido do Lucas, 16/07): a cada dia as apostas entram em
+    # ORDEM DE TEMPO; cada uma aposta STAKE_FRAC (10%) do capital AINDA
+    # DISPONÍVEL — o dinheiro fica TRAVADO na aposta. Só no FECHAMENTO do dia o
+    # mercado liquida e a banca se recompõe (o que sobrou + o que as apostas
+    # pagaram); esse total vira a base do dia seguinte. Sem alavancagem.
     by_day: dict = defaultdict(list)
     for s in signals:
         by_day[s["day"]].append(s)
     real, rpeak, real_dd = 1.0, 1.0, 0.0
     per_day = []
     for day in sorted(by_day):
-        bets = by_day[day]
-        nb = len(bets)
-        stake = real / nb
-        novo = 0.0
+        bets = sorted(by_day[day], key=lambda x: x.get("ts"))
+        disponivel = real
+        liquidado = 0.0
         for s in bets:
+            stake = STAKE_FRAC * disponivel
+            disponivel -= stake                 # trava até o dia fechar
             if s["stopped"]:
-                novo += stake * (1 - config.STOP_EXIT_FRAC)
+                liquidado += stake * (1 - config.STOP_EXIT_FRAC)
             elif s["won"]:
-                novo += stake / s["price"]
+                liquidado += stake / s["price"]
             # NÃO perdeu inteiro → 0
+        novo = disponivel + liquidado           # liquida no fechamento
         ret = (novo / real - 1.0) if real else 0.0
         real = novo
         rpeak = max(rpeak, real)
         dd_after = (1 - real / rpeak) if rpeak else 0.0
         real_dd = max(real_dd, dd_after)
-        per_day.append({"day": day, "n": nb,
-                        "wins": sum(1 for s in bets if s["won"]),
+        per_day.append({"day": day, "n": len(bets),
+                        "wins": sum(1 for x in bets if x["won"]),
                         "ret": ret, "cap": real, "dd": dd_after})
 
-    by = defaultdict(lambda: [0, 0, 0.0])
+    by = defaultdict(lambda: [0, 0])
     for s in signals:
         by[s["icao"]][0] += 1
         by[s["icao"]][1] += 1 if s["won"] else 0
-        by[s["icao"]][2] += _pnl_flat(s)
     return {"n": n, "days": days, "wins": wins, "hit": wins / n,
             "n_stopped": n_stopped,
             "avg_price": sum(s["price"] for s in signals) / n,
-            "flat": flat, "compounded": cap, "maxdd": maxdd,
             "real_mult": real, "real_dd": real_dd, "per_day": per_day,
-            "by_city": dict(by), "signals": signals}
+            "by_city": {k: [v[0], v[1]] for k, v in by.items()},
+            "signals": signals}
