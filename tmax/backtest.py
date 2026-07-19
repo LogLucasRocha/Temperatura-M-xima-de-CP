@@ -705,10 +705,24 @@ def ceifa_report_text(st: dict) -> str:
         f"<b>R${real * 100:.2f}</b> ({(real - 1) * 100:+.1f}%)",
         f"• <b>Retorno diário médio:</b> {ret_med * 100:+.2f}%",
         f"• <b>Drawdown diário médio:</b> {dd_med:.1%} (máximo {dd_max:.1%})",
-        f"• {st.get('n_stopped', 0)} stop(s) a −{config.STOP_EXIT_FRAC:.0%}",
+        _ceifa_stops_line(st),
         "<i>Cada aposta = 10% do capital disponível (trava até o dia fechar); "
-        "a banca liquida no fim do dia e compõe dia a dia. Sem alavancar.</i>",
+        "a banca liquida no fim do dia e compõe dia a dia. Stop fiel à "
+        "execução: só conta se persistir na rodada seguinte ao alarme, com "
+        "saída pelo preço dela. Sem alavancar.</i>",
     ])
+
+
+def _ceifa_stops_line(st: dict) -> str:
+    n_stop = st.get("n_stopped", 0)
+    losses = [s.get("loss_frac") for s in st.get("signals", [])
+              if s.get("stopped") and s.get("loss_frac") is not None]
+    if n_stop and losses:
+        media = sum(losses) / len(losses)
+        return (f"• {n_stop} stop(s) executado(s) · perda real média "
+                f"−{media:.1%}")
+    return (f"• {n_stop} stop(s) (gatilho −{config.STOP_EXIT_FRAC:.0%}, "
+            "persistindo na rodada seguinte)")
 
 
 def _stats(signals: list, res_mismatch: int, days_seen: int) -> dict:
