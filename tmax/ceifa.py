@@ -70,14 +70,26 @@ def simulate(log=lambda m: None) -> dict:
             continue
         nao_final = float(g["preco_nao"].iloc[-1])
         resolvido = nao_final > 0.90 or nao_final < 0.10
-        depois = g[g["ts"] > e["ts"]]
-        stopped = bool((depois["preco_nao"] <= entry * (1 - stop)).any())
+        depois = g[g["ts"] > e["ts"]].reset_index(drop=True)
+        # Stop FIEL à execução real (decisão do Lucas, 19/07): o alarme sai
+        # numa rodada, mas você só executa na rodada SEGUINTE — então o stop
+        # só conta se o preço ainda estiver abaixo do nível no snapshot +1, e
+        # a saída usa o PREÇO DO +1 (não os −15% teóricos). Flashes de uma
+        # rodada (ex.: Pequim 15/07) não stopam.
+        stop_lv = entry * (1 - stop)
+        stopped, loss_frac = False, None
+        precos = depois["preco_nao"].tolist()
+        for i in range(len(precos) - 1):
+            if precos[i] <= stop_lv and precos[i + 1] <= stop_lv:
+                stopped = True
+                loss_frac = 1.0 - precos[i + 1] / entry   # saída no +1
+                break
         if not (resolvido or stopped):
             continue                              # dia ainda em aberto
         won = (not stopped) and (nao_final > 0.5)
         signals.append({"icao": icao, "day": dia, "faixa": faixa,
                         "ts": e["ts"], "price": entry, "won": won,
-                        "stopped": stopped})
+                        "stopped": stopped, "loss_frac": loss_frac})
     log(f"ceifa (snapshots, entrada em H-1): {len(signals)} apostas.")
     return _stats(signals, mkt["dia"].nunique())
 
@@ -107,7 +119,10 @@ def _stats(signals: list, days: int) -> dict:
             stake = STAKE_FRAC * disponivel
             disponivel -= stake                 # trava até o dia fechar
             if s["stopped"]:
-                liquidado += stake * (1 - config.STOP_EXIT_FRAC)
+                # perda REAL do stop: saída pelo preço do snapshot +1
+                lf = s.get("loss_frac")
+                lf = config.STOP_EXIT_FRAC if lf is None else lf
+                liquidado += stake * (1 - lf)
             elif s["won"]:
                 liquidado += stake / s["price"]
             # NÃO perdeu inteiro → 0
