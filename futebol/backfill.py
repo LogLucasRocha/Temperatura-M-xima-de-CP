@@ -96,6 +96,8 @@ def main() -> int:
     registros = []
     di010 = 0          # diagnóstico dos primeiros jogos
     total = 0
+    dbg = 0
+    skip = defaultdict(int)
     for liga in ligas:
         if total >= MAX_TOTAL_GAMES:
             break
@@ -109,11 +111,21 @@ def main() -> int:
             print(f"[{liga.get('sport')}] erro ao listar: {ex}")
             continue
         jogos = [e for e in (evs or []) if is_base_moneyline(e.get("slug", ""))]
+        if dbg < 5:
+            amostra = [e.get("slug") for e in (evs or [])[:4]]
+            um = (evs or [{}])[0]
+            print(f"[dbg {liga.get('sport')}] n_evs={len(evs or [])} "
+                  f"n_base={len(jogos)} keys0={sorted(um.keys())[:6]} "
+                  f"tem_markets={'markets' in um} slugs={amostra}")
+            dbg += 1
         n_liga = 0
         for e in jogos:
             if n_liga >= MAX_GAMES_PER_LEAGUE or total >= MAX_TOTAL_GAMES:
                 break
             mkts = e.get("markets") or []
+            if not mkts:
+                skip["sem_markets"] += 1
+                continue
             # mercado-resultado: outcomes são times (não Yes/No, sem Over/Under)
             mkt = None
             for m in mkts:
@@ -125,14 +137,20 @@ def main() -> int:
                     mkt = m
                     break
             if not mkt:
+                skip["sem_moneyline"] += 1
+                if skip["sem_moneyline"] <= 3:
+                    print(f"  [sem_moneyline] {e.get('slug')}: "
+                          f"questions={[mm.get('question') for mm in mkts][:4]}")
                 continue
             outs = loads(mkt.get("outcomes"))
             toks = loads(mkt.get("clobTokenIds"))
             if len(outs) != len(toks) or not toks:
+                skip["tokens"] += 1
                 continue
             st = epoch(mkt.get("startDate") or e.get("startDate") or "")
             en = epoch(mkt.get("endDate") or e.get("endDate") or "")
             if not st or not en:
+                skip["sem_ts"] += 1
                 continue
             pontos = {}
             try:
@@ -144,6 +162,7 @@ def main() -> int:
                 print(f"[{e.get('slug')}] prices-history erro: {ex}")
                 continue
             if len(pontos) < 2:
+                skip["poucos_pontos"] += 1
                 continue
             # favorito = maior prob na abertura
             fav = max(pontos, key=lambda k: pontos[k][0])
@@ -166,6 +185,7 @@ def main() -> int:
     # ------- agregados -------
     print("\n" + "=" * 60)
     print(f"AMOSTRA: {len(registros)} jogos resolvidos")
+    print("descartes:", dict(skip))
     print("=" * 60)
     if not registros:
         print("Sem jogos processados.")
