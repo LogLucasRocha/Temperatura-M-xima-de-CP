@@ -1,0 +1,67 @@
+name: Captura in-play Futebol (Polymarket)
+
+# Observação in-play: a cada 10 min grava os lados perto da certeza (>=0,90) dos
+# jogos de futebol AO VIVO, com bestBid/bestAsk. Não aposta. Commita 1×/dia.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: futebol-live
+  cancel-in-progress: false
+
+jobs:
+  capturar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v5
+
+      - name: Instalar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      # Buffer do dia corrente (data_futebol/). Chave única por run; a próxima
+      # execução restaura o cache mais recente via restore-keys.
+      - name: Restaurar buffer da captura
+        uses: actions/cache@v4
+        with:
+          path: data_futebol
+          key: futebol-live-${{ github.run_id }}
+          restore-keys: |
+            futebol-live-
+
+      - name: Capturar in-play
+        run: python -m futebol.live
+
+      # Commita dados_futebol/ só quando o dia UTC fecha (novas partições).
+      - name: Commitar dados de futebol
+        if: always()
+        run: |
+          if [ ! -d dados_futebol ]; then
+            echo "sem parquet ainda (nada a commitar)"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dados_futebol
+          if git diff --cached --quiet; then
+            echo "sem dados novos"; exit 0
+          fi
+          git commit -m "Arquiva captura in-play de futebol ($(date -u +%F)) [skip ci]"
+          for i in 1 2 3 4; do
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push falhou (tentativa $i) — rebase e retry"
+            git pull --rebase origin main || true
+            sleep $((i * 3))
+          done
+          echo "não consegui commitar (segue sem falhar)"; exit 0
