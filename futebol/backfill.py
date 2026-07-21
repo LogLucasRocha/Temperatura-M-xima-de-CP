@@ -126,38 +126,38 @@ def main() -> int:
             if not mkts:
                 skip["sem_markets"] += 1
                 continue
-            # mercado-resultado: outcomes são times (não Yes/No, sem Over/Under)
-            mkt = None
+            # Resultado = 3 mercados BINÁRIOS Yes/No (vitória casa / empate /
+            # vitória fora). O token "Yes" de cada um = P(aquele resultado).
+            # Queremos favorito×azarão = os dois de TIME (empate à parte).
+            resultado = []            # (label, yes_token, is_draw)
             for m in mkts:
-                outs = loads(m.get("outcomes"))
-                if (len(outs) in (2, 3)
-                        and not any(str(o).lower() in ("yes", "no") for o in outs)
-                        and not any(k in str(outs).lower()
-                                    for k in ("over", "under", "+", "score"))):
-                    mkt = m
-                    break
-            if not mkt:
+                q = str(m.get("question", "")).lower()
+                outs = [str(o).lower() for o in loads(m.get("outcomes"))]
+                toks = loads(m.get("clobTokenIds"))
+                if outs != ["yes", "no"] or not toks:
+                    continue
+                if not ("win on" in q or "draw" in q):
+                    continue
+                resultado.append((m.get("groupItemTitle") or m.get("question"),
+                                  toks[0], "draw" in q))
+            times = [r for r in resultado if not r[2]]
+            if len(times) < 2:
                 skip["sem_moneyline"] += 1
                 if skip["sem_moneyline"] <= 3:
                     print(f"  [sem_moneyline] {e.get('slug')}: "
                           f"questions={[mm.get('question') for mm in mkts][:4]}")
                 continue
-            outs = loads(mkt.get("outcomes"))
-            toks = loads(mkt.get("clobTokenIds"))
-            if len(outs) != len(toks) or not toks:
-                skip["tokens"] += 1
-                continue
-            st = epoch(mkt.get("startDate") or e.get("startDate") or "")
-            en = epoch(mkt.get("endDate") or e.get("endDate") or "")
+            st = epoch(mkts[0].get("startDate") or e.get("startDate") or "")
+            en = epoch(mkts[0].get("endDate") or e.get("endDate") or "")
             if not st or not en:
                 skip["sem_ts"] += 1
                 continue
             pontos = {}
             try:
-                for nome, tok in zip(outs, toks):
+                for label, tok, _ in times:
                     tp = three_points(price_series(tok, st, en), en)
                     if tp:
-                        pontos[nome] = tp
+                        pontos[label] = tp
             except Exception as ex:  # noqa: BLE001
                 print(f"[{e.get('slug')}] prices-history erro: {ex}")
                 continue
