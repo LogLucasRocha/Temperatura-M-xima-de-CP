@@ -44,13 +44,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python run_ceifa_f.py
 
-      # Terceira mensagem, apartada: observação in-play do futebol.
-      - name: Enviar relatório da Ceifa Futebol in-play
-        continue-on-error: true
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python run_ceifa_futebol.py
+      # (Ceifa Futebol in-play PAUSADA em 21/07 — in-play dinâmico demais para o
+      # ritmo do Actions. run_ceifa_futebol.py segue no repo para retomada.)
 
       - name: Avisar falha no Telegram
         if: failure()

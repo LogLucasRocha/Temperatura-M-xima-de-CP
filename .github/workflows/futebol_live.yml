@@ -1,10 +1,12 @@
 name: Captura in-play Futebol (Polymarket)
 
-# Observação in-play: a cada 10 min grava os lados perto da certeza (>=0,90) dos
-# jogos de futebol AO VIVO, com bestBid/bestAsk. Não aposta. Commita 1×/dia.
+# Observação in-play: grava os lados perto da certeza dos jogos de futebol AO
+# VIVO, com bestBid/bestAsk. Não aposta.
+#
+# PAUSADO (decisão do Lucas, 21/07): o in-play é dinâmico demais para o ritmo do
+# GitHub Actions (10 min). O agendamento foi removido; o código fica no repo e
+# pode ser retomado manualmente (workflow_dispatch) se voltarmos ao tema.
 on:
-  schedule:
-    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
