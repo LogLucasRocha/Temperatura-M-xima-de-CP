@@ -1,24 +1,23 @@
-"""Sondagem da estrutura de ESPORTES da Polymarket.
+"""Sondagem v2 da estrutura de ESPORTES da Polymarket.
 
-Objetivo: descobrir, a partir da API pública, como a Polymarket modela ligas e
-jogos, para depois construir a captura horária (odds na abertura → a cada hora →
-dia do evento). NÃO grava nada e NÃO aposta — só imprime o que a API devolve.
+Descobre: (1) TODAS as ligas via /sports; (2) como listar os JOGOS de uma liga;
+(3) a estrutura do mercado (tokens favorito/azarão); (4) o prices-history
+horário de um jogo real (abertura → hora a hora → evento). Não grava nem aposta.
 
-Roda no GitHub Actions (a rede desta sessão é fechada). Uso:
-    python -m futebol.probe
+Roda no GitHub Actions. Uso: python -m futebol.probe
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sys
-import time
 
 import requests
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
 S = requests.Session()
-S.headers["User-Agent"] = "futebol-research/0.1"
+S.headers["User-Agent"] = "futebol-research/0.2"
 
 
 def get(url: str, **params):
@@ -31,118 +30,106 @@ def sec(t: str) -> None:
     print("\n" + "=" * 72 + f"\n{t}\n" + "=" * 72, flush=True)
 
 
-def dump(obj, n=3500):
-    s = json.dumps(obj, indent=2, ensure_ascii=False, default=str)
-    print(s[:n] + (" …[truncado]" if len(s) > n else ""), flush=True)
+def epoch(iso: str) -> int | None:
+    try:
+        return int(dt.datetime.fromisoformat(
+            iso.replace("Z", "+00:00")).timestamp())
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def main() -> int:
-    # 1) Tags: procurar como as ligas de esporte são identificadas.
-    sec("1) TAGS — procurando ligas/esportes")
-    for params in ({"limit": 1000}, {}, {"is_carousel": "true"}):
-        try:
-            tags = get(f"{GAMMA}/tags", **params)
-            if isinstance(tags, list) and tags:
-                print(f"[/tags {params}] -> {len(tags)} tags. Exemplo:")
-                dump(tags[0], 800)
-                alvo = [t for t in tags if any(
-                    k in str(t.get("slug", "")).lower()
-                    + str(t.get("label", "")).lower()
-                    for k in ("soccer", "football", "serie", "liga", "premier",
-                              "brasil", "-bra", "nba", "nfl", "mlb", "league",
-                              "cup", "champions", "laliga", "epl", "sport"))]
-                print(f"\n{len(alvo)} tags parecem esporte. Slugs:")
-                for t in alvo[:80]:
-                    print("  •", t.get("id"), "|", t.get("slug"), "|",
-                          t.get("label"))
-                break
-        except Exception as e:  # noqa: BLE001
-            print(f"[/tags {params}] ERRO: {e}")
+    # 1) TODAS as ligas.
+    sec("1) /sports — todas as ligas (sport | series | tags)")
+    sports = get(f"{GAMMA}/sports")
+    print(f"total: {len(sports)} ligas")
+    for s in sports:
+        print(f"  id={s.get('id'):>4}  sport={str(s.get('sport')):<14} "
+              f"series={s.get('series')}  tags={s.get('tags')}")
 
-    # 2) Endpoint dedicado de esportes (se existir).
-    sec("2) ENDPOINTS dedicados de esporte (tentativas)")
-    for path in ("/sports", "/series", "/sports/events", "/leagues"):
-        try:
-            d = get(f"{GAMMA}{path}", limit=20)
-            print(f"[{path}] OK -> tipo={type(d).__name__}, "
-                  f"len={len(d) if hasattr(d, '__len__') else '?'}")
-            dump(d, 1500)
-        except Exception as e:  # noqa: BLE001
-            print(f"[{path}] ERRO: {e}")
+    # 2) Achar o Brasileirão e testar como listar seus jogos.
+    sec("2) Brasileirão — achar a liga e listar jogos")
+    cand = [s for s in sports if any(
+        k in str(s.get("sport", "")).lower()
+        for k in ("bra", "brazil", "brasil", "sbr", "serie"))]
+    print("candidatos:", [(s.get("id"), s.get("sport"), s.get("series"))
+                          for s in cand])
+    liga = cand[0] if cand else next(
+        (s for s in sports if s.get("sport") == "epl"), sports[0])
+    print("usando liga:", liga.get("sport"), "| series:", liga.get("series"),
+          "| tags:", liga.get("tags"))
 
-    # 3) Eventos filtrando por tag (tenta os nomes de parâmetro possíveis).
-    sec("3) EVENTS por tag do Brasileirão (tentando params)")
-    game = None
-    for params in ({"tag_slug": "bra"}, {"tag": "bra"},
-                   {"tag_slug": "brasileirao"}, {"series_slug": "bra"},
-                   {"tag_slug": "soccer"}, {"tag_slug": "football"}):
-        try:
-            evs = get(f"{GAMMA}/events", closed="false", limit=6,
-                      order="startDate", ascending="true", **params)
-            n = len(evs) if isinstance(evs, list) else 0
-            print(f"[events {params}] -> {n} eventos")
-            if n:
-                for e in evs[:6]:
-                    print("   •", e.get("slug"), "|", e.get("title"))
-                if game is None:
-                    game = evs[0]
-        except Exception as e:  # noqa: BLE001
-            print(f"[events {params}] ERRO: {e}")
-
-    # 4) Estrutura completa de UM jogo (para ver times, horário, tokens).
-    sec("4) ESTRUTURA de um jogo (evento + mercados + tokens)")
-    if game is None:
-        try:  # fallback: qualquer evento com 2 outcomes (jogo)
-            evs = get(f"{GAMMA}/events", closed="false", limit=40)
-            game = next((e for e in evs if len(e.get("markets", []) or []) >= 1
-                         and "vs" in (e.get("title", "").lower()
-                                      + e.get("slug", ""))), None)
-        except Exception as e:  # noqa: BLE001
-            print("fallback ERRO:", e)
-    if game:
-        print("Campos do evento:", sorted(game.keys()))
-        for k in ("slug", "title", "startDate", "startTime", "gameStartTime",
-                  "closed", "series", "tags"):
-            if k in game:
-                print(f"  {k}: {json.dumps(game[k], ensure_ascii=False, default=str)[:200]}")
-        mkts = game.get("markets") or []
-        print(f"\n{len(mkts)} mercado(s) no evento. Primeiro mercado:")
-        if mkts:
-            m = mkts[0]
-            print("Campos do mercado:", sorted(m.keys()))
-            for k in ("question", "outcomes", "outcomePrices", "clobTokenIds",
-                      "lastTradePrice", "bestBid", "bestAsk", "volume",
-                      "startDate", "endDate", "closed"):
-                if k in m:
-                    print(f"  {k}: {json.dumps(m[k], ensure_ascii=False, default=str)[:240]}")
-    else:
-        print("Não achei um jogo de exemplo pelas tentativas acima.")
-
-    # 5) prices-history: a série histórica que dá abertura→hora a hora→evento.
-    sec("5) PRICES-HISTORY (o histórico horário que queremos)")
-    token = None
-    if game and (game.get("markets")):
-        raw = game["markets"][0].get("clobTokenIds")
-        try:
-            ids = json.loads(raw) if isinstance(raw, str) else raw
-            token = ids[0] if ids else None
-        except Exception:  # noqa: BLE001
-            token = None
-    print("token de teste:", str(token)[:40], "…" if token else "(nenhum)")
-    if token:
-        for params in ({"interval": "max", "fidelity": 60},
-                       {"interval": "1w", "fidelity": 60},
-                       {"startTs": int(time.time()) - 14 * 86400,
-                        "endTs": int(time.time()), "fidelity": 60}):
+    series_id = str(liga.get("series") or "").split(",")[0]
+    tag_ids = [t for t in str(liga.get("tags") or "").split(",") if t]
+    jogos = []
+    tentativas = ([{"series_id": series_id}] if series_id else []) + \
+                 [{"tag_id": t} for t in tag_ids]
+    for extra in tentativas:
+        for closed in ("true", "false"):
             try:
-                d = get(f"{CLOB}/prices-history", market=token, **params)
-                pts = d.get("history", d) if isinstance(d, dict) else d
-                print(f"[prices-history {params}] -> {len(pts)} pontos")
+                evs = get(f"{GAMMA}/events", closed=closed, limit=6,
+                          order="startDate", ascending="false", **extra)
+                n = len(evs) if isinstance(evs, list) else 0
+                print(f"  [events {extra} closed={closed}] -> {n}")
+                for e in (evs or [])[:6]:
+                    print("      •", e.get("slug"), "|", e.get("title"),
+                          "| start:", e.get("startDate"))
+                if n and not jogos:
+                    jogos = evs
+            except Exception as ex:  # noqa: BLE001
+                print(f"  [events {extra} closed={closed}] ERRO: {ex}")
+
+    # 3) Estrutura de um JOGO resolvido (times, tokens, preços).
+    sec("3) Estrutura de um jogo (moneyline: favorito x azarão)")
+    jogo = None
+    for e in jogos:
+        if e.get("markets"):
+            jogo = e
+            break
+    if not jogo:
+        print("sem jogo com mercado nas tentativas; encerro aqui.")
+        return 0
+    print("jogo:", jogo.get("title"), "|", jogo.get("slug"))
+    print("start:", jogo.get("startDate"), "end:", jogo.get("endDate"),
+          "closed:", jogo.get("closed"))
+    mkt = jogo["markets"][0]
+    for k in ("question", "outcomes", "outcomePrices", "clobTokenIds",
+              "lastTradePrice", "bestBid", "bestAsk", "spread", "umaEndDate",
+              "startDate", "endDate", "closed", "volume"):
+        if k in mkt:
+            print(f"  {k}: {json.dumps(mkt[k], ensure_ascii=False, default=str)[:200]}")
+
+    # 4) prices-history do jogo (horário) — agora num token REAL.
+    sec("4) prices-history horário (abertura → evento)")
+    try:
+        ids = json.loads(mkt["clobTokenIds"]) if isinstance(
+            mkt["clobTokenIds"], str) else mkt["clobTokenIds"]
+    except Exception:  # noqa: BLE001
+        ids = []
+    st = epoch(jogo.get("startDate") or mkt.get("startDate") or "")
+    en = epoch(jogo.get("endDate") or mkt.get("endDate") or "")
+    print("tokens:", [str(i)[:24] + "…" for i in ids], "| janela:", st, "->", en)
+    for i, tok in enumerate(ids):
+        got = False
+        for params in ({"startTs": st, "endTs": en, "fidelity": 60},
+                       {"interval": "max", "fidelity": 60},
+                       {"interval": "all", "fidelity": 60}):
+            if params.get("startTs") in (None,) or params.get("endTs") in (None,):
+                if "startTs" in params:
+                    continue
+            try:
+                d = get(f"{CLOB}/prices-history", market=tok, **params)
+                pts = d.get("history") if isinstance(d, dict) else d
+                pts = pts or []
+                print(f"  token[{i}] {params} -> {len(pts)} pontos")
                 if pts:
-                    print("  primeiro:", pts[0], "| último:", pts[-1])
-                break
-            except Exception as e:  # noqa: BLE001
-                print(f"[prices-history {params}] ERRO: {e}")
+                    print("     abertura:", pts[0], "| evento:", pts[-1])
+                    got = True
+                    break
+            except Exception as ex:  # noqa: BLE001
+                print(f"  token[{i}] {params} ERRO: {ex}")
+        if got and i == 0:
+            continue
     return 0
 
 
