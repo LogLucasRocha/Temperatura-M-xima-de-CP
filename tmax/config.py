@@ -105,6 +105,39 @@ STATIONS_FAHRENHEIT = {
                     unit="F"),
 }
 
+# Cidades NOVAS em observação (22/07): a Polymarket tem mercado de máxima delas,
+# nunca capturamos. Modo observação — sem alertas nem aposta, só relatório de
+# monitoramento, até medirmos a assertividade. ICAO tirado da DESCRIÇÃO oficial
+# de resolução de cada mercado (não chutado): Milão resolve em Malpensa/LIMC e
+# Taipé em Songshan/RCSS, por exemplo. Hong Kong ficou de fora (Observatório de
+# HK, fonte não-METAR). Todas em °C.
+STATIONS_OBSERVE = {
+    "LIMC": Station("LIMC", "Milão", "Malpensa Intl",
+                    "🇮🇹", 45.6306, 8.7281, "Europe/Rome"),
+    "ZHHH": Station("ZHHH", "Wuhan", "Wuhan Tianhe Intl",
+                    "🇨🇳", 30.7838, 114.2081, "Asia/Shanghai"),
+    "EDDM": Station("EDDM", "Munique", "Munich Airport",
+                    "🇩🇪", 48.3538, 11.7861, "Europe/Berlin"),
+    "EFHK": Station("EFHK", "Helsinque", "Helsinki-Vantaa",
+                    "🇫🇮", 60.3172, 24.9633, "Europe/Helsinki"),
+    "LLBG": Station("LLBG", "Tel Aviv", "Ben Gurion Intl",
+                    "🇮🇱", 32.0114, 34.8867, "Asia/Jerusalem"),
+    "RPLL": Station("RPLL", "Manila", "Ninoy Aquino Intl",
+                    "🇵🇭", 14.5086, 121.0195, "Asia/Manila"),
+    "WMKK": Station("WMKK", "Kuala Lumpur", "Kuala Lumpur Intl",
+                    "🇲🇾", 2.7456, 101.7099, "Asia/Kuala_Lumpur"),
+    "RCSS": Station("RCSS", "Taipé", "Taipei Songshan",
+                    "🇹🇼", 25.0694, 121.5519, "Asia/Taipei"),
+    "ZGGG": Station("ZGGG", "Guangzhou", "Baiyun Intl",
+                    "🇨🇳", 23.3924, 113.2988, "Asia/Shanghai"),
+    "ZGSZ": Station("ZGSZ", "Shenzhen", "Bao'an Intl",
+                    "🇨🇳", 22.6393, 113.8108, "Asia/Shanghai"),
+    "ZUUU": Station("ZUUU", "Chengdu", "Shuangliu Intl",
+                    "🇨🇳", 30.5785, 103.9471, "Asia/Shanghai"),
+    "FACT": Station("FACT", "Cidade do Cabo", "Cape Town Intl",
+                    "🇿🇦", -33.9648, 18.6017, "Africa/Johannesburg"),
+}
+
 DEFAULT_STATION = STATIONS["SBGR"]
 
 # Modelos determinísticos (Open-Meteo) -> família usada na correção de viés

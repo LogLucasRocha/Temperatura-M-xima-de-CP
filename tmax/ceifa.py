@@ -42,6 +42,8 @@ def _tz(icao: str):
         return config.STATIONS[icao].tz
     if icao in config.STATIONS_FAHRENHEIT:
         return config.STATIONS_FAHRENHEIT[icao].tz
+    if icao in getattr(config, "STATIONS_OBSERVE", {}):
+        return config.STATIONS_OBSERVE[icao].tz
     return dt.timezone.utc
 
 

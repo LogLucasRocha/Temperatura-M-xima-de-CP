@@ -50,6 +50,11 @@ _ICAO_TO_CITY_SLUG = {
     "EPWA": "warsaw", "LTFM": "istanbul", "LTAC": "ankara", "RKSI": "seoul",
     "RJTT": "tokyo", "ZBAA": "beijing", "ZSPD": "shanghai", "WSSS": "singapore",
     "NZWN": "wellington",
+    # cidades novas em observação (22/07) — slug conferido na descrição oficial
+    "LIMC": "milan", "ZHHH": "wuhan", "EDDM": "munich", "EFHK": "helsinki",
+    "LLBG": "tel-aviv", "RPLL": "manila", "WMKK": "kuala-lumpur",
+    "RCSS": "taipei", "ZGGG": "guangzhou", "ZGSZ": "shenzhen",
+    "ZUUU": "chengdu", "FACT": "cape-town",
 }
 
 _MONTHS = ("january", "february", "march", "april", "may", "june", "july",

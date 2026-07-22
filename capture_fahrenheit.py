@@ -33,7 +33,10 @@ import send_telegram as digest
 
 
 def main() -> int:
-    stations = list(config.STATIONS_FAHRENHEIT.values())
+    # Todas as cidades em OBSERVAÇÃO: °F (EUA) + o grupo novo em °C (Milão,
+    # Wuhan, etc.). Mesmo mecanismo de captura; os relatórios filtram por grupo.
+    stations = list({**config.STATIONS_FAHRENHEIT,
+                     **config.STATIONS_OBSERVE}.values())
     contexts: dict = {}
 
     def _build(station):
