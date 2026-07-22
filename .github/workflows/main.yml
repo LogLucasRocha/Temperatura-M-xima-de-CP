@@ -37,7 +37,9 @@ jobs:
       - name: Restaurar caches (viés + estado do digest)
         uses: actions/cache@v4
         with:
-          path: data
+          path: |
+            data
+            data_low
           key: tmax-data-${{ github.run_id }}
           restore-keys: |
             tmax-data-
@@ -57,6 +59,13 @@ jobs:
         continue-on-error: true
         run: python capture_fahrenheit.py
 
+      # Captura da temperatura MÍNIMA (lowest) — pendurada no digest porque o
+      # cron do workflow próprio (lowtemp_live.yml) é estrangulado pelo GitHub e
+      # perderia a janela da madrugada. Aqui roda a cada 10 min de verdade.
+      - name: Capturar temperatura mínima (observação)
+        continue-on-error: true
+        run: python -m lowtemp.capture
+
       # Arquivo de dados ao vivo: o send_telegram acumula num buffer no cache
       # (data/capture) e, quando o dia UTC fecha, consolida em dados/*.parquet.
       # Este passo commita dados/ só quando há novidade — na prática 1x/dia,
@@ -70,6 +79,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add dados
+          [ -d dados_low ] && git add dados_low || true
           if git diff --cached --quiet; then
             echo "sem dados novos para commitar"; exit 0
           fi

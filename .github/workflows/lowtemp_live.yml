@@ -1,10 +1,12 @@
 name: Captura Mínima (Lowest Temperature)
 
-# Observação: a cada 10 min grava o mercado de MÍNIMA das cidades cobertas +
-# a hora mais fria prevista, em dados_low/. Não aposta. Commita 1×/dia.
+# Observação: grava o mercado de MÍNIMA das cidades cobertas + a hora mais fria
+# prevista, em dados_low/. Não aposta.
+#
+# AGENDAMENTO DESLIGADO (22/07): a captura da mínima agora roda pendurada no
+# digest de 10 min (main.yml), que é confiável — o cron próprio era estrangulado
+# pelo GitHub. Este workflow fica só para disparo manual (workflow_dispatch).
 on:
-  schedule:
-    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
