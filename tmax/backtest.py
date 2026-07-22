@@ -715,31 +715,29 @@ def ceifa_report_text(st: dict, titulo: str | None = None,
         f"• <b>Drawdown diário médio:</b> {dd_med:.1%} (máximo {dd_max:.1%})",
         _ceifa_stops_line(st),
         "<i>Cada aposta = 10% do capital disponível (trava até o dia fechar); "
-        "a banca liquida no fim do dia e compõe dia a dia. Stop fiel à "
-        "execução: só conta se persistir na rodada seguinte ao alarme, com "
-        "saída pelo preço dela. Sem alavancar.</i>",
+        "a banca liquida no fim do dia e compõe dia a dia. SEM stop: no lugar, "
+        "um filtro de incerteza NÃO entra em dia de ensemble largo na H-1 "
+        "(teto − mediana alto = risco de estouro). Sem alavancar.</i>",
     ]
     return "\n".join(linhas)
 
 
 def _ceifa_stops_line(st: dict) -> str:
     n_stop = st.get("n_stopped", 0)
-    # Perda TOTAL (−100%): entrou, não stopou e o NÃO resolveu em ~0 — a cauda
-    # catastrófica (ex.: a máxima entrou na faixa). Fica explícita, não diluída.
+    # Perda TOTAL (−100%): entrou e o NÃO resolveu em ~0 — a cauda catastrófica
+    # (a máxima entrou na faixa). Fica explícita, não diluída na assertividade.
     n_full = max(0, st.get("n", 0) - st.get("wins", 0) - n_stop)
-    losses = [s.get("loss_frac") for s in st.get("signals", [])
-              if s.get("stopped") and s.get("loss_frac") is not None]
-    if n_stop and losses:
-        media = sum(losses) / len(losses)
-        base = (f"• {n_stop} stop(s) executado(s) · perda real média "
-                f"−{media:.1%}")
-    else:
-        base = (f"• {n_stop} stop(s) (gatilho −{config.STOP_EXIT_FRAC:.0%}, "
-                "persistindo na rodada seguinte)")
+    n_filt = st.get("n_filtrado", 0)
+    linhas = [f"• Filtro de incerteza: {n_filt} aposta(s) cortada(s) "
+              "(dia de ensemble largo)"]
     if n_full:
-        base += (f"\n• <b>{n_full} perda(s) TOTAL(is) (−100%, sem stop)</b> — "
-                 "a máxima entrou na faixa e o NÃO foi a zero")
-    return base
+        linhas.append(f"• <b>{n_full} perda(s) TOTAL(is) (−100%)</b> — "
+                      "a máxima entrou na faixa e o NÃO foi a zero")
+    else:
+        linhas.append("• 0 perdas totais")
+    if n_stop:                                    # legado (não deve ocorrer)
+        linhas.append(f"• {n_stop} stop(s) (legado)")
+    return "\n".join(linhas)
 
 
 def _stats(signals: list, res_mismatch: int, days_seen: int) -> dict:

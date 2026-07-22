@@ -249,6 +249,17 @@ CEIFA_ENABLED = True
 CEIFA_PRICE_MIN = 0.95      # exclusivo: preço do NÃO > 0,95
 CEIFA_PRICE_MAX = 0.995     # exclusivo: preço do NÃO < 0,995
 
+# FILTRO DE INCERTEZA (decisão do Lucas, 22/07 — substitui o stop loss no
+# backtest). A Ceifa vende quase-certeza; em dia de ensemble muito largo na H-1
+# (teto_ens − mediana grande) o estouro é possível (ex.: Istambul 22/07, spread
+# 4,9 vs ~1,6 normal → máxima foi a 34 e o NÃO virou zero). Então NÃO entramos
+# quando o spread está alto. STOP desligado: o filtro não depende de reagir ao
+# gap, ele simplesmente não entra no dia perigoso.
+CEIFA_STOP_ENABLED = False       # stop no backtest (desligado — filtro no lugar)
+CEIFA_SPREAD_FILTER = True        # liga o filtro de incerteza
+CEIFA_SPREAD_ABS = 3.0            # corta se spread na H-1 >= isto (°C)
+CEIFA_SPREAD_REL = 2.0            # ou se spread >= REL × mediana da cidade
+
 # Colheita de favoritos: APOSENTADA (decisão do Lucas 15/07 — substituída pela
 # Ceifa). Mantida no código, desligada por HARVEST_ENABLED. Parâmetros antigos
 # preservados só para o backtest histórico de comparação.

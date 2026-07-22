@@ -76,9 +76,33 @@ def simulate(log=lambda m: None, icaos=None, archive=ARCHIVE) -> dict:
              .agg(lambda s: int(s.mode().iat[0])).to_dict())
     mkt["hloc"] = mkt.groupby("icao", group_keys=False).apply(_local_hour)
 
+    # Incerteza do ensemble = teto_ens − mediana. Guardamos as séries por
+    # (icao, dia) para pegar o spread NA H-1, e a mediana por cidade para o
+    # filtro relativo (spread alto RELATIVO ao normal daquela estação).
+    ps = prev.dropna(subset=["teto_ens", "mediana"]).copy()
+    ps["spread"] = ps["teto_ens"] - ps["mediana"]
+    spread_norm = ps.groupby("icao")["spread"].median().to_dict()
+    spread_by = {k: v.sort_values("ts") for k, v in ps.groupby(["icao", "dia"])}
+
+    def spread_na_entrada(icao, dia, e_ts):
+        d = spread_by.get((icao, dia))
+        if d is None:
+            return None
+        ate = d[d["ts"] <= e_ts]
+        return float(ate["spread"].iloc[-1]) if len(ate) else None
+
+    def incerto(icao, spr):
+        """dia perigoso? spread alto no absoluto OU relativo ao normal."""
+        if spr is None or not config.CEIFA_SPREAD_FILTER:
+            return False
+        if spr >= config.CEIFA_SPREAD_ABS:
+            return True
+        norm = spread_norm.get(icao)
+        return norm is not None and norm > 0 and spr >= config.CEIFA_SPREAD_REL * norm
+
     pmin, pmax = config.CEIFA_PRICE_MIN, config.CEIFA_PRICE_MAX
-    stop = config.STOP_EXIT_FRAC
     signals = []
+    n_filtrado = 0
     for (icao, dia, faixa), g in mkt.groupby(["icao", "dia", "faixa"]):
         H = Hs.get((icao, dia))
         if H is None:
@@ -91,29 +115,25 @@ def simulate(log=lambda m: None, icaos=None, archive=ARCHIVE) -> dict:
         if not (pmin < entry < pmax):
             continue
         nao_final = float(g["preco_nao"].iloc[-1])
-        resolvido = nao_final > 0.90 or nao_final < 0.10
-        depois = g[g["ts"] > e["ts"]].reset_index(drop=True)
-        # Stop FIEL à execução real (decisão do Lucas, 19/07): o alarme sai
-        # numa rodada, mas você só executa na rodada SEGUINTE — então o stop
-        # só conta se o preço ainda estiver abaixo do nível no snapshot +1, e
-        # a saída usa o PREÇO DO +1 (não os −15% teóricos). Flashes de uma
-        # rodada (ex.: Pequim 15/07) não stopam.
-        stop_lv = entry * (1 - stop)
-        stopped, loss_frac = False, None
-        precos = depois["preco_nao"].tolist()
-        for i in range(len(precos) - 1):
-            if precos[i] <= stop_lv and precos[i + 1] <= stop_lv:
-                stopped = True
-                loss_frac = 1.0 - precos[i + 1] / entry   # saída no +1
-                break
-        if not (resolvido or stopped):
+        if not (nao_final > 0.90 or nao_final < 0.10):
             continue                              # dia ainda em aberto
-        won = (not stopped) and (nao_final > 0.5)
+        # FILTRO DE INCERTEZA (no lugar do stop): não entra em dia de ensemble
+        # largo na H-1 — é onde o estouro (NÃO → zero) acontece.
+        spr = spread_na_entrada(icao, dia, e["ts"])
+        if incerto(icao, spr):
+            n_filtrado += 1
+            continue
+        # Sem stop: segura até liquidar. Vitória se o NÃO foi para ~1,0.
+        won = nao_final > 0.5
         signals.append({"icao": icao, "day": dia, "faixa": faixa,
                         "ts": e["ts"], "price": entry, "won": won,
-                        "stopped": stopped, "loss_frac": loss_frac})
-    log(f"ceifa (snapshots, entrada em H-1): {len(signals)} apostas.")
-    return _stats(signals, mkt["dia"].nunique())
+                        "stopped": False, "loss_frac": None,
+                        "spread": spr})
+    log(f"ceifa (H-1, filtro de incerteza): {len(signals)} apostas · "
+        f"{n_filtrado} cortadas por incerteza.")
+    st = _stats(signals, mkt["dia"].nunique())
+    st["n_filtrado"] = n_filtrado
+    return st
 
 
 def _stats(signals: list, days: int) -> dict:
