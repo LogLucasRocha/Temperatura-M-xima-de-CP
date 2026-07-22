@@ -724,14 +724,22 @@ def ceifa_report_text(st: dict, titulo: str | None = None,
 
 def _ceifa_stops_line(st: dict) -> str:
     n_stop = st.get("n_stopped", 0)
+    # Perda TOTAL (−100%): entrou, não stopou e o NÃO resolveu em ~0 — a cauda
+    # catastrófica (ex.: a máxima entrou na faixa). Fica explícita, não diluída.
+    n_full = max(0, st.get("n", 0) - st.get("wins", 0) - n_stop)
     losses = [s.get("loss_frac") for s in st.get("signals", [])
               if s.get("stopped") and s.get("loss_frac") is not None]
     if n_stop and losses:
         media = sum(losses) / len(losses)
-        return (f"• {n_stop} stop(s) executado(s) · perda real média "
+        base = (f"• {n_stop} stop(s) executado(s) · perda real média "
                 f"−{media:.1%}")
-    return (f"• {n_stop} stop(s) (gatilho −{config.STOP_EXIT_FRAC:.0%}, "
-            "persistindo na rodada seguinte)")
+    else:
+        base = (f"• {n_stop} stop(s) (gatilho −{config.STOP_EXIT_FRAC:.0%}, "
+                "persistindo na rodada seguinte)")
+    if n_full:
+        base += (f"\n• <b>{n_full} perda(s) TOTAL(is) (−100%, sem stop)</b> — "
+                 "a máxima entrou na faixa e o NÃO foi a zero")
+    return base
 
 
 def _stats(signals: list, res_mismatch: int, days_seen: int) -> dict:
