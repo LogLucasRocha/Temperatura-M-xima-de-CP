@@ -50,52 +50,66 @@ def scan(params, cidades):
         off += 100
 
 
-def main() -> int:
-    # 1) achar a tag de temperatura/clima
-    tagid = None
-    try:
-        for t in get(f"{GAMMA}/tags", limit=1000):
-            lab = (str(t.get("label", "")) + str(t.get("slug", ""))).lower()
-            if "temperature" in lab or "weather" in lab or "climate" in lab:
-                print("tag candidata:", t.get("id"), t.get("slug"), t.get("label"))
-                tagid = tagid or t.get("id")
-    except Exception as exc:  # noqa: BLE001
-        print("tags err:", exc)
+# Cidades candidatas (slug provável na Polymarket). As que já temos ficam de
+# fora do "novas". Testa highest (hoje/ontem) e, se achar, quantos dias de
+# histórico + se tem lowest.
+CANDIDATAS = [
+    "milan", "wuhan", "berlin", "rome", "munich", "frankfurt", "hamburg",
+    "barcelona", "lisbon", "dublin", "vienna", "prague", "budapest", "athens",
+    "stockholm", "oslo", "copenhagen", "helsinki", "zurich", "geneva",
+    "brussels", "rotterdam", "dubai", "abu-dhabi", "doha", "riyadh", "tel-aviv",
+    "delhi", "new-delhi", "mumbai", "bangalore", "kolkata", "chennai",
+    "hyderabad", "bangkok", "jakarta", "manila", "kuala-lumpur", "hanoi",
+    "ho-chi-minh-city", "hong-kong", "taipei", "guangzhou", "shenzhen",
+    "chengdu", "osaka", "cairo", "lagos", "nairobi", "johannesburg",
+    "cape-town", "casablanca", "sydney", "melbourne", "brisbane", "perth",
+    "auckland", "rio-de-janeiro", "brasilia", "lima", "bogota", "santiago",
+    "montevideo", "caracas", "kyiv", "athens",
+]
 
-    cidades: set = set()
-    if tagid:
-        scan({"tag_id": str(tagid)}, cidades)
-    if not cidades:
-        print("(sem tag útil — varrendo eventos ativos)")
-        scan({}, cidades)
 
-    nossas = set(pm._ICAO_TO_CITY_SLUG.values())
-    print(f"\n=== cidades de temperatura ativas na Polymarket: {len(cidades)} ===")
-    for c in sorted(cidades):
-        print(("  NOVA → " if c not in nossas else "         ") + c)
-    novas = sorted(cidades - nossas)
-    print(f"\nNOVAS (não temos): {novas or 'nenhuma'}")
-    faltando_ativas = sorted(nossas - cidades)
-    print(f"(nossas sem evento ativo agora: {faltando_ativas})")
-
-    # 2) Milan / Wuhan explícitos
-    print("\n=== Milan / Wuhan (highest e lowest, últimos 12 dias) ===")
+def dias_hist(city, kind, n=12):
     hoje = dt.date.today()
-    for nome, variants in (("Milan", ["milan", "milano"]),
-                           ("Wuhan", ["wuhan"])):
-        for city in variants:
-            for kind in ("highest", "lowest"):
-                hits = 0
-                for back in range(12):
-                    d = hoje - dt.timedelta(days=back)
-                    slug = (f"{kind}-temperature-in-{city}-on-"
-                            f"{pm._MONTHS[d.month - 1]}-{d.day}-{d.year}")
-                    try:
-                        if ev_ok(get(f"{GAMMA}/events", slug=slug)):
-                            hits += 1
-                    except Exception:  # noqa: BLE001
-                        pass
-                print(f"  {nome:<6} [{city:<7}] {kind:<7}: {hits}/12 dias")
+    hits = 0
+    for back in range(n):
+        d = hoje - dt.timedelta(days=back)
+        slug = (f"{kind}-temperature-in-{city}-on-"
+                f"{pm._MONTHS[d.month - 1]}-{d.day}-{d.year}")
+        try:
+            if ev_ok(get(f"{GAMMA}/events", slug=slug)):
+                hits += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return hits
+
+
+def main() -> int:
+    nossas = set(pm._ICAO_TO_CITY_SLUG.values())
+    hoje = dt.date.today()
+
+    print("=== varredura de cidades candidatas (highest) ===")
+    achou = []
+    for city in dict.fromkeys(CANDIDATAS):     # dedup preservando ordem
+        # teste rápido: hoje OU ontem existe?
+        existe = any(
+            ev_ok(get(f"{GAMMA}/events", slug=(
+                f"highest-temperature-in-{city}-on-"
+                f"{pm._MONTHS[d.month - 1]}-{d.day}-{d.year}")))
+            for d in (hoje, hoje - dt.timedelta(days=1))
+        )
+        if not existe:
+            continue
+        jah = city in nossas
+        low = dias_hist(city, "lowest", 6) > 0
+        achou.append((city, jah, low))
+        tag = "(já temos)" if jah else "NOVA"
+        print(f"  {'✓':<2} {city:<18} highest {tag:<11} lowest: {'sim' if low else 'não'}")
+
+    novas = [c for c, jah, _ in achou if not jah]
+    print(f"\nNOVAS que a Polymarket tem e não capturamos: {novas or 'nenhuma'}")
+    print(f"(total candidatas com highest: {len(achou)})")
+    print("\nObs.: lista de candidatas é curada — pode haver outras. "
+          "A varredura automática não rola porque a Gamma limita a paginação.")
     return 0
 
 
