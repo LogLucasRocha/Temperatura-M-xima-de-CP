@@ -24,8 +24,8 @@ ARCHIVE = config.ROOT / "dados"
 STAKE_FRAC = 0.10
 
 
-def _load(base: str) -> pd.DataFrame:
-    root = ARCHIVE / base
+def _load(base: str, archive=ARCHIVE) -> pd.DataFrame:
+    root = archive / base
     files = sorted(root.rglob("*.parquet")) if root.exists() else []
     if not files:
         return pd.DataFrame()
@@ -49,15 +49,18 @@ def _local_hour(g: pd.DataFrame) -> pd.Series:
     return g["ts"].dt.tz_convert(_tz(g.name)).dt.hour
 
 
-def simulate(log=lambda m: None, icaos=None) -> dict:
+def simulate(log=lambda m: None, icaos=None, archive=ARCHIVE) -> dict:
     """Roda a Ceifa (entrada em H-1) nos snapshots e devolve estatísticas no
     formato que backtest.ceifa_report_text espera.
 
     icaos: se dado, restringe a análise a esse conjunto de estações (para
     separar o relatório das ativas em °C do das cidades °F em monitoramento).
+    archive: raiz do lago de dados (padrão dados/ = máxima; dados_low/ = mínima).
+    A base 'previsao' guarda a hora do extremo em pico_hora — para o Lowest é a
+    hora mais FRIA, então a entrada em H-1 sai natural sem mudar este código.
     """
-    mkt = _load("mercado")
-    prev = _load("previsao")
+    mkt = _load("mercado", archive)
+    prev = _load("previsao", archive)
     if icaos is not None:
         icaos = set(icaos)
         mkt = mkt[mkt["icao"].isin(icaos)] if not mkt.empty else mkt
